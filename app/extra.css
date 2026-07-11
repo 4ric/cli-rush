@@ -1,0 +1,25 @@
+.answer-review{grid-column:1/-1;border:1px solid var(--line);background:rgba(11,22,19,.7)}
+.answer-review-head{min-height:44px;padding:0 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);color:var(--muted);font:700 9px var(--font-geist-mono);letter-spacing:.1em}
+.answer-review-head b{color:var(--acid)}
+.answer-review article{padding:18px;border-bottom:1px solid var(--line)}
+.answer-review article:last-child{border:0}
+.answer-review article small,.custom-list small{color:var(--cyan);font:650 8px var(--font-geist-mono);text-transform:uppercase}
+.answer-review h3,.custom-list h3{margin:8px 0;font-size:15px}
+.answer-review code,.custom-list code{display:inline-block;padding:8px 10px;background:#050b09;border:1px solid rgba(217,255,87,.18);color:var(--acid);font:550 12px var(--font-geist-mono)}
+.answer-review article p{margin:9px 0 0;color:var(--muted);font-size:11px;line-height:1.5}
+.manage{width:min(900px,calc(100% - 48px));margin:0 auto;padding:60px 0;position:relative;z-index:1}
+.manage-title h1{margin:18px 0 12px;font-size:clamp(38px,5vw,58px);letter-spacing:-.05em}
+.manage-title>p{color:var(--muted);line-height:1.6}
+.command-form,.custom-list{margin-top:28px;padding:24px;border:1px solid var(--line);background:rgba(11,22,19,.82)}
+.command-form label{display:block;margin-bottom:17px;color:var(--muted);font-size:11px}
+.command-form input,.command-form textarea,.command-form select{display:block;width:100%;margin-top:7px;padding:12px;border:1px solid #385047;background:#07110f;color:var(--text);font:500 13px var(--font-geist-mono)}
+.command-form textarea{min-height:88px;resize:vertical}
+.form-row{display:grid;grid-template-columns:2fr 2fr 1fr;gap:12px}
+.command-form .primary{margin-top:4px}
+.custom-status{color:var(--cyan);font-size:11px}
+.custom-list{padding:0}
+.custom-list>p{padding:18px;color:var(--muted)}
+.custom-list article{padding:16px;display:flex;align-items:center;justify-content:space-between;gap:20px;border-bottom:1px solid var(--line)}
+.custom-list article>div{min-width:0}
+.custom-list article button{padding:8px 11px;border:1px solid rgba(255,122,114,.35);background:transparent;color:var(--red);font:650 9px var(--font-geist-mono);text-transform:uppercase}
+@media(max-width:650px){.manage{width:calc(100% - 28px)}.form-row{grid-template-columns:1fr}.custom-list article{align-items:flex-start;flex-direction:column}}

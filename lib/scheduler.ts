@@ -1,0 +1,7 @@
+export const intervals=[600000,86400000,259200000,604800000,1209600000,2592000000] as const;
+export type Outcome="firstTry"|"retry"|"revealed"|"failed";
+export interface Review{stage:number;dueAt:number;lastAt:number;lapses:number;bestStage:number;outcome:Outcome}
+export const schedule=(previous:Review|undefined,outcome:Outcome,now:number):Review=>{const success=outcome==="firstTry";const stage=success?Math.min(previous?previous.stage+1:0,intervals.length-1):Math.max(0,(previous?.stage??0)-2);return{stage,dueAt:now+intervals[stage],lastAt:now,lapses:(previous?.lapses??0)+(success?0:1),bestStage:Math.max(previous?.bestStage??0,stage),outcome};};
+export const due=(reviews:Record<string,Review>,now:number)=>Object.entries(reviews).filter(([,r])=>r.dueAt<=now).map(([id,review])=>({id,review})).sort((a,b)=>a.review.dueAt-b.review.dueAt||b.review.lapses-a.review.lapses||a.id.localeCompare(b.id));
+export const nextDue=(reviews:Record<string,Review>)=>{const values=Object.values(reviews).map(r=>r.dueAt);return values.length?Math.min(...values):null;};
+export const score=(difficulty:number,attempt:number,responseMs:number,combo:number,revealed:boolean)=>{if(revealed)return 0;const attemptM=attempt===1?1:attempt===2?0.65:0.3;const speed=attempt===1?1+Math.max(0,Math.min(.15,(8000-responseMs)/8000*.15)):1;const comboM=combo>=8?1.3:combo>=5?1.2:combo>=3?1.1:1;return Math.round(100*(difficulty===3?1.5:difficulty===2?1.25:1)*attemptM*speed*comboM);};
