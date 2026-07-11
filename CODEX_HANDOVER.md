@@ -28,8 +28,9 @@ Implemented player flow:
 4. Receive deterministic, specific feedback.
 5. Build a score and combination for correct first-attempt recall.
 6. Move on immediately after an error without seeing the answer.
-7. At a completed timer, review missed commands and explanations.
-8. Save browser progress and schedule future reviews.
+7. Recover a failed item later for reduced retry credit without advancing mastery.
+8. At a completed timer, review incorrect, recovered and unanswered commands.
+9. Save browser progress and schedule future reviews.
 
 Also implemented:
 

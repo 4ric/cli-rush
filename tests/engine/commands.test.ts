@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";import test from "node:test";
 import {applyCommand,commands,initialDevice,isIPv4,isMask,prepare,prompt,validate} from "../../lib/engine.ts";
-test("expanded catalogue has 214 unique objectives across nine modes",()=>{assert.equal(commands.length,214);assert.equal(new Set(commands.map(x=>x.id)).size,commands.length);assert.equal(new Set(commands.map(x=>x.mode)).size,9);assert.ok(new Set(commands.map(x=>x.canonical.toLowerCase())).size>=200);});
+test("expanded catalogue preserves the documented baseline",()=>{assert.equal(commands.length,214);assert.equal(new Set(commands.map(x=>x.id)).size,214);assert.equal(new Set(commands.map(x=>x.canonical.toLowerCase())).size,203);assert.equal(new Set(commands.map(x=>x.mode)).size,9);assert.equal(new Set(commands.map(x=>x.topic)).size,25);});
 test("every canonical command validates in its declared mode",async t=>{for(const command of commands)await t.test(command.id,()=>assert.equal(validate(command.canonical,command.mode,command.id).ok,true));});
 test("case and whitespace are normalised",()=>assert.equal(validate("  SHOW   IP interface BRIEF ","privileged","show.ip-interface-brief").ok,true));
 test("wrong modes are rejected specifically",()=>{const r=validate("show running-config","global","show.running");assert.equal(r.ok,false);if(!r.ok)assert.equal(r.code,"WRONG_MODE");});

@@ -7,9 +7,9 @@
   },
   "scripts": {
     "install:ci": "bash scripts/install-ci.sh",
-    "dev": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vite",
+    "dev": "vite",
     "build": "bash scripts/build-verified.sh",
-    "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
+    "start": "vinext start",
     "start:docker": "node server/auth-server.mjs",
     "init:secrets": "node scripts/init-secrets.mjs",
     "test": "npm run test:unit && npm run build && npm run test:auth && node --test tests/rendered-html.test.mjs",

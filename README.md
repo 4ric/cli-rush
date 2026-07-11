@@ -13,7 +13,9 @@ This is an independent educational simulator. It is not affiliated with or endor
 - Deterministic local validation. Player input is never executed.
 - Specific error feedback during the round.
 - Wrong answers move on without revealing the correct command.
-- Correct commands and explanations appear only after the timer reaches zero.
+- A later retry earns reduced score and does not advance mastery.
+- An objective left unanswered when time expires is added to the missed review.
+- Correct commands and explanations for missed items appear only after the timer reaches zero.
 - Combination scoring and capped speed bonuses.
 - Local progress and spaced-review scheduling.
 - Custom question, answer and explanation management.
