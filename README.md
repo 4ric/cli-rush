@@ -12,6 +12,9 @@ This is an independent educational simulator. It is not affiliated with or endor
 - Responsive layouts for full-screen, windowed, tablet, portrait-mobile and short landscape play.
 - Untimed Easy practice with staged strategies, command shapes and voluntary reveals.
 - Easy attempts earn learning points but never advance mastery; a full reveal earns zero points.
+- IOS-style `Tab` completion expands only unique prefixes in the current CLI mode.
+- Inline `?` help lists deterministic next-token options without submitting the command or directly changing score or time.
+- A correct CLI-assisted answer keeps its normal score and time reward but cannot advance mastery.
 - Normal starts with sixty seconds, adds three seconds for a correct command or five seconds from a three-answer clean streak, and removes one, three then five seconds across consecutive errors.
 - Hard starts with sixty seconds, always adds three seconds for a correct command, and removes five, ten then fifteen seconds across consecutive errors.
 - Hardcore starts with sixty seconds, adds two seconds for a correct command and ends immediately after one incorrect submission.
@@ -35,6 +38,7 @@ This is an independent educational simulator. It is not affiliated with or endor
 app/page.tsx                 Responsive game, report and custom-command UI
 lib/engine.ts                Parser, CLI modes and simulator
 lib/expanded-catalogue.ts    Curated built-in command pack
+lib/cli-assistance.ts        Deterministic Tab completion and question-mark menus
 lib/game-modes.ts            Deterministic game-mode time rules
 lib/learning.ts              Deterministic Easy-mode learning aids
 lib/scheduler.ts             Review scheduling and score calculation

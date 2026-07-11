@@ -12,19 +12,30 @@ test("accepted attempts distinguish first recall from retry credit", () => {
     attempt: 1,
     outcome: "firstTry",
     firstTry: true,
+    masteryEligible: true,
     combo: 5,
   });
   assert.deepEqual(acceptedAttemptPolicy(2, 4), {
     attempt: 2,
     outcome: "retry",
     firstTry: false,
+    masteryEligible: false,
     combo: 0,
   });
   assert.deepEqual(acceptedAttemptPolicy(3, 4), {
     attempt: 3,
     outcome: "retry",
     firstTry: false,
+    masteryEligible: false,
     combo: 0,
+  });
+
+  assert.deepEqual(acceptedAttemptPolicy(1, 4, true), {
+    attempt: 1,
+    outcome: "firstTry",
+    firstTry: true,
+    masteryEligible: false,
+    combo: 5,
   });
 });
 

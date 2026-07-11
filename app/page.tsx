@@ -39,6 +39,10 @@ import {
   type AssistanceLevel,
 } from "@/lib/learning.ts";
 import {
+  cliHelp,
+  completeCliInput,
+} from "@/lib/cli-assistance.ts";
+import {
   acceptedAttemptPolicy,
   failureFeedback,
   mayRevealAnswers,
@@ -84,6 +88,7 @@ interface Round {
   resolved: number;
   firstTry: number;
   recovered: number;
+  assisted: number;
   unanswered: number;
   combo: number;
   bestCombo: number;
@@ -131,6 +136,7 @@ const blankRound = (): Round => ({
   resolved: 0,
   firstTry: 0,
   recovered: 0,
+  assisted: 0,
   unanswered: 0,
   combo: 0,
   bestCombo: 0,
@@ -249,6 +255,7 @@ export default function GameClient() {
   const reviewBaselines = useRef(new Map<string, Review | undefined>());
   const submittedForCurrentObjective = useRef(false);
   const consecutiveWrong = useRef(0);
+  const cliAssisted = useRef(false);
   const timeChangeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const advanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const timerLastTick = useRef<number | null>(null);
@@ -267,6 +274,7 @@ export default function GameClient() {
   const [advancing, setAdvancing] = useState(false);
   const [presentationAttempt, setPresentationAttempt] = useState(1);
   const [assistance, setAssistance] = useState<AssistanceLevel>(0);
+  const [cliAssistanceUsed, setCliAssistanceUsed] = useState(false);
   const [easyComplete, setEasyComplete] = useState(false);
   const [timeChange, setTimeChange] = useState<TimeChange | null>(null);
 
@@ -353,6 +361,8 @@ export default function GameClient() {
     submittedForCurrentObjective.current = false;
     setPresentationAttempt((roundAttempts.current.get(item.id) ?? 0) + 1);
     setAssistance(0);
+    cliAssisted.current = false;
+    setCliAssistanceUsed(false);
     setEasyComplete(false);
     setDevice((current) => prepare(current, item));
     setHistory([]);
@@ -489,6 +499,24 @@ export default function GameClient() {
           correct: (old?.correct ?? 0) + (correct ? 1 : 0),
           firstTry: old?.firstTry ?? 0,
           lastError,
+          review: old?.review,
+        },
+      },
+    });
+  }, [save]);
+
+  const updateAssistedCommand = useCallback((id: string) => {
+    const current = progressRef.current;
+    const old = current.commands[id];
+    save({
+      ...current,
+      commands: {
+        ...current.commands,
+        [id]: {
+          attempts: (old?.attempts ?? 0) + 1,
+          correct: (old?.correct ?? 0) + 1,
+          firstTry: old?.firstTry ?? 0,
+          lastError: null,
           review: old?.review,
         },
       },
@@ -705,6 +733,48 @@ export default function GameClient() {
     setTimeout(() => inputRef.current?.focus(), 0);
   };
 
+  const markCliAssisted = () => {
+    cliAssisted.current = true;
+    setCliAssistanceUsed(true);
+  };
+
+  const completeCommandInput = (value = input, restoreFocus = false) => {
+    const completion = completeCliInput(value, device.mode, catalogue);
+    if (completion.assisted) markCliAssisted();
+    if (completion.changed) {
+      setInput(completion.input);
+      setHistoryAt(-1);
+    }
+    setFeedback({
+      tone: "neutral",
+      title: completion.changed ? "Tab completion · no penalty" : "No unique completion",
+      message: `${completion.message} No score or time-bank adjustment was made.`,
+    });
+    if (restoreFocus) setTimeout(() => inputRef.current?.focus(), 0);
+    return completion.changed;
+  };
+
+  const showCliOptions = (value = input, restoreFocus = false) => {
+    const result = cliHelp(value, device.mode, catalogue);
+    if (result.assisted) markCliAssisted();
+    const optionLines = result.options.map((option) =>
+      `  ${option.value.padEnd(18)} ${option.description}`);
+    if (result.hiddenOptions) {
+      optionLines.push(`  … ${result.hiddenOptions} more options; type another character to narrow the list.`);
+    }
+    setLines((values) => [
+      ...values,
+      `${prompt(device)} ${value}?`,
+      ...(optionLines.length ? optionLines : ["  % No matching options"]),
+    ].slice(-60));
+    setFeedback({
+      tone: "neutral",
+      title: result.assisted ? "Context help · no penalty" : "No context options",
+      message: `${result.message} No score or time-bank adjustment was made; timed clocks continue normally.`,
+    });
+    if (restoreFocus) setTimeout(() => inputRef.current?.focus(), 0);
+  };
+
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (paused || advancing || time === 0) return;
@@ -718,6 +788,7 @@ export default function GameClient() {
 
     submittedForCurrentObjective.current = true;
     const attempt = (roundAttempts.current.get(item.id) ?? 0) + 1;
+    const usedCliAssistance = cliAssisted.current;
     roundAttempts.current.set(item.id, attempt);
     const currentPrompt = prompt(device);
     setHistory((values) => [...values, result.input].slice(-20));
@@ -836,7 +907,8 @@ export default function GameClient() {
     if (activeMode === "easy") {
       const learningStreak = roundRef.current.combo + 1;
       const points = learningPoints(item.difficulty, attempt, learningStreak, assistance);
-      const clean = attempt === 1 && assistance === 0;
+      const clean = attempt === 1 && assistance === 0 && !usedCliAssistance;
+      const assistedRecall = assistance > 0 || usedCliAssistance;
       const nextRound: Round = {
         ...roundRef.current,
         score: roundRef.current.score + points,
@@ -845,6 +917,7 @@ export default function GameClient() {
         resolved: roundRef.current.resolved + 1,
         firstTry: roundRef.current.firstTry + (clean ? 1 : 0),
         recovered: roundRef.current.recovered + (attempt > 1 ? 1 : 0),
+        assisted: roundRef.current.assisted + (assistedRecall ? 1 : 0),
         combo: learningStreak,
         bestCombo: Math.max(roundRef.current.bestCombo, learningStreak),
         times: [...roundRef.current.times, responseMs],
@@ -875,7 +948,7 @@ export default function GameClient() {
       return;
     }
 
-    const policy = acceptedAttemptPolicy(attempt, roundRef.current.combo);
+    const policy = acceptedAttemptPolicy(attempt, roundRef.current.combo, usedCliAssistance);
     const timeEffect = correctAnswerEffect(activeMode, policy.combo);
     consecutiveWrong.current = timeEffect.nextConsecutiveWrong;
     const points = score(
@@ -891,23 +964,29 @@ export default function GameClient() {
       submissions: roundRef.current.submissions + 1,
       presented: roundRef.current.presented + (attempt === 1 ? 1 : 0),
       resolved: roundRef.current.resolved + 1,
-      firstTry: roundRef.current.firstTry + (policy.firstTry ? 1 : 0),
+      firstTry: roundRef.current.firstTry + (policy.masteryEligible ? 1 : 0),
       recovered: roundRef.current.recovered + (policy.firstTry ? 0 : 1),
+      assisted: roundRef.current.assisted + (usedCliAssistance ? 1 : 0),
       combo: policy.combo,
       bestCombo: Math.max(roundRef.current.bestCombo, policy.combo),
       times: [...roundRef.current.times, responseMs],
       timeGainedMs: roundRef.current.timeGainedMs + timeEffect.timeDeltaMs,
-      reviewIds: uniq([...roundRef.current.reviewIds, item.id]),
+      reviewIds: usedCliAssistance
+        ? roundRef.current.reviewIds
+        : uniq([...roundRef.current.reviewIds, item.id]),
       reviewReasons: policy.firstTry
         ? roundRef.current.reviewReasons
         : { ...roundRef.current.reviewReasons, [item.id]: "recovered" },
     };
     setRoundBoth(nextRound);
-    updateCommand(item.id, 1, policy.firstTry, null, policy.outcome);
+    if (usedCliAssistance) updateAssistedCommand(item.id);
+    else updateCommand(item.id, 1, policy.firstTry, null, policy.outcome);
     setDevice(simulation.state);
     setTime((value) => value === null ? null : value + timeEffect.timeDeltaMs);
     showTimeChange(timeEffect.timeDeltaMs);
-    const award = policy.firstTry
+    const award = usedCliAssistance
+      ? "CLI-assisted recall · mastery unchanged"
+      : policy.firstTry
       ? `${policy.combo}x clean combination`
       : "reduced retry credit";
     setLines((values) => [
@@ -921,7 +1000,9 @@ export default function GameClient() {
       title: policy.firstTry
         ? `Command accepted · +${seconds(timeEffect.timeDeltaMs)}s`
         : `Recovered on retry · +${seconds(timeEffect.timeDeltaMs)}s`,
-      message: policy.firstTry
+      message: usedCliAssistance
+        ? `${item.explanation} +${points} points with the full time reward; CLI assistance leaves mastery unchanged.`
+        : policy.firstTry
         ? `${item.explanation} +${points} points.`
         : `${item.explanation} +${points} reduced retry points; the mastery interval did not advance.`,
     });
@@ -931,7 +1012,17 @@ export default function GameClient() {
     scheduleAdvance(progressRef.current.reducedMotion ? 250 : 180);
   };
 
-  const historyKeys = (event: KeyboardEvent<HTMLInputElement>) => {
+  const commandKeys = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Tab" && !event.shiftKey) {
+      const completed = completeCommandInput(event.currentTarget.value);
+      if (completed) event.preventDefault();
+      return;
+    }
+    if (event.key === "?") {
+      event.preventDefault();
+      showCliOptions(event.currentTarget.value);
+      return;
+    }
     if (event.key === "ArrowUp") {
       event.preventDefault();
       if (!history.length) return;
@@ -950,6 +1041,16 @@ export default function GameClient() {
         setInput(history[next]);
       }
     }
+  };
+
+  const changeCommandInput = (value: string) => {
+    if (value.endsWith("?")) {
+      const withoutQuestionMark = value.slice(0, -1);
+      setInput(withoutQuestionMark);
+      showCliOptions(withoutQuestionMark);
+      return;
+    }
+    setInput(value);
   };
 
   const reviews = Object.fromEntries(
@@ -1035,7 +1136,7 @@ export default function GameClient() {
             </p>
             <dl>
               <div><dt>{selectedMode === "easy" ? "Learning mode" : `${selectedRules.label} best`}</dt><dd>{selectedBest ?? "—"}</dd></div>
-              <div><dt>Best clean combination</dt><dd>{progress.bestCombo ? `${progress.bestCombo}x` : "—"}</dd></div>
+              <div><dt>Best reward streak</dt><dd>{progress.bestCombo ? `${progress.bestCombo}x` : "—"}</dd></div>
               <div><dt>Due reviews</dt><dd>{dueCount}</dd></div>
             </dl>
           </div>
@@ -1122,6 +1223,7 @@ export default function GameClient() {
               {presentationAttempt > 1
                 ? activeMode === "easy" ? ` · TRY ${presentationAttempt}` : " · RETRY · REDUCED CREDIT"
                 : ""}
+              {cliAssistanceUsed ? " · CLI HELP USED · NO MASTERY" : ""}
             </p>
             <small>OPERATIONAL OBJECTIVE</small>
             <h1 id="objective-title">{paused ? "Objective hidden while paused" : item.objective}</h1>
@@ -1147,7 +1249,7 @@ export default function GameClient() {
                 {!easyComplete && assistance === 1 && (
                   <button className="secondary" onClick={() => showAssistance(2)}>Reveal command · no points</button>
                 )}
-                {!easyComplete && assistance > 0 && <span>Assisted attempt · no mastery</span>}
+                {!easyComplete && (assistance > 0 || cliAssistanceUsed) && <span>Assisted attempt · no mastery</span>}
                 {easyComplete && (
                   <button ref={nextEasyButtonRef} className="primary small" onClick={nextEasyObjective}>Next command</button>
                 )}
@@ -1183,10 +1285,11 @@ export default function GameClient() {
                   <input
                     id="command"
                     aria-describedby="objective-title"
+                    aria-keyshortcuts="Tab ? ArrowUp ArrowDown Enter"
                     ref={inputRef}
                     value={input}
-                    onChange={(event) => setInput(event.target.value)}
-                    onKeyDown={historyKeys}
+                    onChange={(event) => changeCommandInput(event.target.value)}
+                    onKeyDown={commandKeys}
                     onPaste={(event) => event.preventDefault()}
                     autoComplete="off"
                     autoCorrect="off"
@@ -1194,7 +1297,9 @@ export default function GameClient() {
                     maxLength={256}
                     disabled={advancing}
                   />
-                  <button disabled={advancing}>Run</button>
+                  <button className="cli-assist" type="button" onClick={() => completeCommandInput(input, true)} disabled={advancing} aria-label="Complete command with Tab">Tab</button>
+                  <button className="cli-assist" type="button" onClick={() => showCliOptions(input, true)} disabled={advancing} aria-label="Show context options with question mark">?</button>
+                  <button type="submit" disabled={advancing}>Run</button>
                 </form>
               </>
             )}
@@ -1208,10 +1313,10 @@ export default function GameClient() {
           )}
           <p className="help">
             {activeMode === "easy"
-              ? "Try freely · Use staged help when stuck · Easy practice never changes mastery"
+              ? "Tab completes unique text · ? lists options · No score/time penalty · Easy never changes mastery"
               : activeMode === "hardcore"
-                ? "Enter submits · ↑/↓ command history · Correct adds 2 seconds · One incorrect command ends the run"
-                : "Enter submits · ↑/↓ command history · Correct adds time · Errors remove time"}
+                ? "Tab completes · ? lists options · Help has no direct penalty · One incorrect submission ends the run"
+                : "Tab completes unique text · ? lists options · Help has no direct score/time penalty · Enter submits"}
           </p>
         </section>
       )}
@@ -1230,10 +1335,10 @@ export default function GameClient() {
           </div>
 
           <div className="report-grid">
-            <div><small>Commands resolved</small><b>{report.round.resolved}</b><span>{report.round.recovered} recovered</span></div>
+            <div><small>Commands resolved</small><b>{report.round.resolved}</b><span>{report.round.recovered} recovered · {report.round.assisted} assisted</span></div>
             <div><small>Clean recall</small><b>{pct(report.round.presented ? report.round.firstTry / report.round.presented : 0)}</b><span>{report.round.firstTry} of {report.round.presented}</span></div>
             <div><small>Submission accuracy</small><b>{pct(report.round.submissions ? report.round.resolved / report.round.submissions : 0)}</b><span>{report.round.resolved} of {report.round.submissions}</span></div>
-            <div><small>Best streak</small><b>{report.round.bestCombo}x</b><span>{report.mode === "easy" ? "Learning progress" : "Clean recalls"}</span></div>
+            <div><small>Best streak</small><b>{report.round.bestCombo}x</b><span>{report.mode === "easy" ? "Learning progress" : "Reward streak"}</span></div>
             <div><small>Median response</small><b>{medianResponse === null ? "—" : `${(medianResponse / 1000).toFixed(1)}s`}</b><span>Resolved commands</span></div>
             <div><small>Time gained</small><b>{report.mode === "easy" ? "—" : `+${seconds(report.round.timeGainedMs)}s`}</b><span>Correct commands</span></div>
             <div><small>Time lost</small><b>{report.mode === "easy" || report.mode === "hardcore" ? "—" : `−${seconds(report.round.timeLostMs)}s`}</b><span>{report.mode === "hardcore" ? "One-strike rule" : "Incorrect commands"}</span></div>

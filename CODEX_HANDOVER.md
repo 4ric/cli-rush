@@ -27,11 +27,12 @@ Implemented player flow:
 3. Move into sixty-second time-bank modes: correct commands add time, Normal and Hard errors remove time, and one Hardcore error ends the run.
 4. Read an operational objective and Cisco-style prompt.
 5. Type a full canonical command from memory.
-6. Receive deterministic, specific feedback and visible time changes.
-7. Build a score and clean-recall combination.
-8. Recover a failed item later for reduced retry credit without advancing mastery.
-9. At a completed timer, review incorrect, recovered and unanswered commands.
-10. Save browser progress and schedule future reviews.
+6. Use IOS-style `Tab` prefix completion or `?` next-token help when spelling or syntax is uncertain.
+7. Receive deterministic, specific feedback and visible time changes.
+8. Build a score and reward streak; assisted answers retain the game reward but do not advance mastery.
+9. Recover a failed item later for reduced retry credit without advancing mastery.
+10. At a completed timer, review incorrect, recovered and unanswered commands.
+11. Save browser progress and schedule future reviews.
 
 Also implemented:
 
@@ -51,6 +52,7 @@ Also implemented:
 | `app/globals.css` / `app/extra.css` | Responsive visual system |
 | `lib/engine.ts` | Parser, modes, validation and simulated device state |
 | `lib/expanded-catalogue.ts` | Expanded CCNA-oriented learning content |
+| `lib/cli-assistance.ts` | Deterministic IOS-style Tab completion and `?` option lookup |
 | `lib/gameplay.ts` | Answer-reveal and failure-feedback policy |
 | `lib/game-modes.ts` | Easy, Normal, Hard and Hardcore timing rules |
 | `lib/learning.ts` | Easy-mode strategies, masked shapes, reveals and mnemonics |
@@ -72,6 +74,8 @@ The application validates against curated command data and mode rules. Do not re
 ### Recall before reveal
 
 During a timed round, an incorrect answer does not expose the correct command. The player moves on. Full answers for missed items appear only when the time bank reaches zero. Ending early or failing a Hardcore run does not reveal them.
+
+`Tab` and `?` are deterministic catalogue lookups, not alternative validators. Using either is neutral at the moment it is requested. A subsequently correct answer keeps its normal game score and time reward, but the assisted recall does not advance mastery or a review interval.
 
 ### Local-first progress
 

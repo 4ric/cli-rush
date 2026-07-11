@@ -4,18 +4,21 @@ export interface AcceptedAttemptPolicy {
   attempt: number;
   outcome: Extract<Outcome, "firstTry" | "retry">;
   firstTry: boolean;
+  masteryEligible: boolean;
   combo: number;
 }
 
 export const acceptedAttemptPolicy = (
   attempt: number,
   currentCombo: number,
+  assisted = false,
 ): AcceptedAttemptPolicy => {
   const firstTry = attempt === 1;
   return {
     attempt,
     outcome: firstTry ? "firstTry" : "retry",
     firstTry,
+    masteryEligible: firstTry && !assisted,
     combo: firstTry ? currentCombo + 1 : 0,
   };
 };
