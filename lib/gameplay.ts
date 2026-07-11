@@ -21,7 +21,7 @@ export const acceptedAttemptPolicy = (
 };
 
 export const failureFeedback = (specificError: string): string =>
-  `${specificError} The correct command and full explanation will be shown when the round ends.`;
+  `${specificError} The correct command and full explanation will be shown only when the time bank reaches zero.`;
 
 export const mayRevealAnswers = (timerReachedZero: boolean): boolean => timerReachedZero;
 

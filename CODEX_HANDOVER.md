@@ -22,15 +22,16 @@ The built-in catalogue currently contains:
 
 Implemented player flow:
 
-1. Start a 60-second Command Rush.
-2. Read an operational objective and Cisco-style prompt.
-3. Type a full canonical command from memory.
-4. Receive deterministic, specific feedback.
-5. Build a score and combination for correct first-attempt recall.
-6. Move on immediately after an error without seeing the answer.
-7. Recover a failed item later for reduced retry credit without advancing mastery.
-8. At a completed timer, review incorrect, recovered and unanswered commands.
-9. Save browser progress and schedule future reviews.
+1. Choose Easy, Normal, Hard or Hardcore rules before starting.
+2. Learn commands without time pressure in Easy, using staged deterministic help when needed.
+3. Move into sixty-second time-bank modes: correct commands add time, Normal and Hard errors remove time, and one Hardcore error ends the run.
+4. Read an operational objective and Cisco-style prompt.
+5. Type a full canonical command from memory.
+6. Receive deterministic, specific feedback and visible time changes.
+7. Build a score and clean-recall combination.
+8. Recover a failed item later for reduced retry credit without advancing mastery.
+9. At a completed timer, review incorrect, recovered and unanswered commands.
+10. Save browser progress and schedule future reviews.
 
 Also implemented:
 
@@ -46,11 +47,13 @@ Also implemented:
 
 | Path | Responsibility |
 | --- | --- |
-| `app/page.tsx` | Game UI, round lifecycle, reports and custom-command management |
+| `app/page.tsx` | Game UI, responsive round lifecycle, reports and custom-command management |
 | `app/globals.css` / `app/extra.css` | Responsive visual system |
 | `lib/engine.ts` | Parser, modes, validation and simulated device state |
 | `lib/expanded-catalogue.ts` | Expanded CCNA-oriented learning content |
 | `lib/gameplay.ts` | Answer-reveal and failure-feedback policy |
+| `lib/game-modes.ts` | Easy, Normal, Hard and Hardcore timing rules |
+| `lib/learning.ts` | Easy-mode strategies, masked shapes, reveals and mnemonics |
 | `lib/scheduler.ts` | Spaced review intervals and scoring |
 | `server/auth-server.mjs` | Docker HTTP gateway, login and custom-content persistence |
 | `scripts/init-secrets.mjs` | Interactive password-hash and session-secret generation |
@@ -68,7 +71,7 @@ The application validates against curated command data and mode rules. Do not re
 
 ### Recall before reveal
 
-During a timed round, an incorrect answer does not expose the correct command. The player moves on. Full answers for missed items appear only after the sixty-second timer completes. Ending early does not reveal them.
+During a timed round, an incorrect answer does not expose the correct command. The player moves on. Full answers for missed items appear only when the time bank reaches zero. Ending early or failing a Hardcore run does not reveal them.
 
 ### Local-first progress
 

@@ -8,7 +8,14 @@ This is an independent educational simulator. It is not affiliated with or endor
 
 ## Current behaviour
 
-- Sixty-second Command Rush rounds.
+- Four game modes: Easy, Normal, Hard and Hardcore.
+- Responsive layouts for full-screen, windowed, tablet, portrait-mobile and short landscape play.
+- Untimed Easy practice with staged strategies, command shapes and voluntary reveals.
+- Easy attempts earn learning points but never advance mastery; a full reveal earns zero points.
+- Normal starts with sixty seconds, adds three seconds for a correct command or five seconds from a three-answer clean streak, and removes one, three then five seconds across consecutive errors.
+- Hard starts with sixty seconds, always adds three seconds for a correct command, and removes five, ten then fifteen seconds across consecutive errors.
+- Hardcore starts with sixty seconds, adds two seconds for a correct command and ends immediately after one incorrect submission.
+- A correct answer resets the consecutive-error penalty tier.
 - User EXEC, Privileged EXEC, Global, Interface, Router, Line, VLAN, named ACL and DHCP-pool modes.
 - Deterministic local validation. Player input is never executed.
 - Specific error feedback during the round.
@@ -25,9 +32,11 @@ This is an independent educational simulator. It is not affiliated with or endor
 ## Architecture
 
 ```text
-app/page.tsx                 Game, report and custom-command UI
+app/page.tsx                 Responsive game, report and custom-command UI
 lib/engine.ts                Parser, CLI modes and simulator
 lib/expanded-catalogue.ts    Curated built-in command pack
+lib/game-modes.ts            Deterministic game-mode time rules
+lib/learning.ts              Deterministic Easy-mode learning aids
 lib/scheduler.ts             Review scheduling and score calculation
 server/auth-server.mjs       Docker authentication and persistence gateway
 scripts/init-secrets.mjs     Interactive password and session-secret setup
@@ -144,7 +153,7 @@ Use **Manage commands** from the application header. Each custom entry contains:
 
 - Question or operational objective
 - Correct command
-- Explanation shown after timeout
+- Explanation or memory note, shown after successful Easy recall or when a timed round reaches zero
 - CLI mode
 - Verification, configuration or navigation type
 - Topic and difficulty

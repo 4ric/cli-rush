@@ -32,6 +32,8 @@ test("failure feedback explains the error without adding a canonical answer", ()
   const canonical = "show ip interface brief";
   const message = failureFeedback("The command is in the wrong mode.");
   assert.match(message, /wrong mode/i);
+  assert.match(message, /time bank reaches zero/i);
+  assert.doesNotMatch(message, /round ends/i);
   assert.doesNotMatch(message, new RegExp(canonical, "i"));
 });
 
