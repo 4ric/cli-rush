@@ -1,60 +1,158 @@
 # CLI RUSH: Network Command Arena
 
-A local-first Cisco-style command recall game. This first vertical slice delivers one complete loop: start a 60-second Command Rush, type commands into a simulated terminal, receive deterministic feedback, build a score and combination, save progress locally, schedule weak commands for review and inspect a real end-of-round report.
+A local-first Cisco-style command recall game. The current pack contains **214 mode-specific objectives**, **203 distinct canonical command strings**, **9 CLI modes** and **25 topics**.
 
-This is an independent educational simulator. It is not affiliated with or endorsed by Cisco. The included IOS XE command pack is marked **simulator-tested draft**. It must receive an external technical review before being described as technically reviewed content.
+The pack is a curated CCNA-oriented IOS/IOS XE practice set, not every command in IOS XE. IOS XE has thousands of platform-, release-, licence- and feature-specific commands. The content is marked **simulator-tested draft** until it is checked against named IOS/IOS XE lab images by a networking subject-matter expert.
 
-## First-slice scope
+This is an independent educational simulator. It is not affiliated with or endorsed by Cisco.
 
-- 36 deterministic command objectives across User EXEC, Privileged EXEC, Global configuration, Interface configuration and Router configuration modes.
-- Cisco-style prompts, command history, state changes and simulated `show` output.
-- Named validation errors for wrong mode, missing or reordered keywords, extra input, IPv4 addresses, subnet masks, wildcard-mask confusion, interface names and wrong objectives.
-- A real 60-second round with pause, capped speed bonuses, combination multipliers, graduated feedback and answer reveal after three errors.
-- Versioned device-local progress in `localStorage`.
-- A transparent review ladder: 10 minutes, 1 day, 3 days, 7 days, 14 days and 30 days.
-- A report calculated only from the completed run.
-- Keyboard navigation, reduced motion and independent sound control.
+## Current behaviour
 
-There are no multiplayer claims, achievements, inactive navigation items or fabricated statistics.
+- Sixty-second Command Rush rounds.
+- User EXEC, Privileged EXEC, Global, Interface, Router, Line, VLAN, named ACL and DHCP-pool modes.
+- Deterministic local validation. Player input is never executed.
+- Specific error feedback during the round.
+- Wrong answers move on without revealing the correct command.
+- Correct commands and explanations appear only after the timer reaches zero.
+- Combination scoring and capped speed bonuses.
+- Local progress and spaced-review scheduling.
+- Custom question, answer and explanation management.
+- Docker persistence for custom commands under `/data`.
+- One configured login account with no registration route.
 
 ## Architecture
 
 ```text
-app/page.tsx          UI, round orchestration and local persistence
-lib/engine.ts         command catalogue, validator, CLI modes and device simulator
-lib/scheduler.ts      pure review scheduling and score calculation
-tests/engine/         table-driven command and scheduler tests
+app/page.tsx                 Game, report and custom-command UI
+lib/engine.ts                Parser, CLI modes and simulator
+lib/expanded-catalogue.ts    Curated built-in command pack
+lib/scheduler.ts             Review scheduling and score calculation
+server/auth-server.mjs       Docker authentication and persistence gateway
+scripts/init-secrets.mjs     Interactive password and session-secret setup
+tests/engine/                Command, scheduler and reveal-policy tests
 ```
 
-The command validator and review scheduler do not depend on React. Player input is compared only against curated data and pure validation functions. It is never passed to a shell, evaluator, SQL query or real network session.
+The Docker gateway uses:
 
-## Run locally
+- A scrypt password hash; the plaintext password is never stored.
+- A single username configured at runtime.
+- Signed, `HttpOnly`, `SameSite=Strict` session cookies.
+- The `__Host-` cookie prefix when HTTPS mode is enabled.
+- Five failed logins per IP within fifteen minutes before lockout.
+- Exact origin checks for login, logout and custom-command writes.
+- Security headers and a read-only container filesystem.
+- Docker secret files instead of secrets in Compose or Git.
+
+## Local development
 
 ```bash
 npm ci
 npm run dev
 ```
 
-Run the focused tests:
+Validation:
 
 ```bash
-npm run test:unit
-```
-
-Run the full build and rendered-output check:
-
-```bash
+npm run lint
 npm test
 ```
 
-## Content model
+## Docker deployment
 
-Each command record has a stable ID, required mode, canonical command, objective, explanation, topic, difficulty and intent. Memory mode requires the full canonical form. Abbreviations are intentionally excluded until a mode-specific ambiguity tree is added and tested.
+The requested deployment directory is written exactly as supplied:
 
-## Known limitations and next priorities
+```text
+/data/contrainers/cli-rush
+```
 
-1. Add a dedicated Daily Recall session that consumes due items; this slice schedules and exposes the real due count but does not add another game mode.
-2. Move the draft catalogue into schema-validated JSON packs and add a formal technical review workflow.
-3. Add multi-command Syntax Chain scenarios with final state assertions.
-4. Add PWA service-worker support and verified offline installation.
-5. Add browser-level interaction tests once a browser test runner is part of the project.
+If `contrainers` was a typo, change both the directory and the volume path in `compose.yaml` before deploying.
+
+### 1. Clone and enter the repository
+
+```bash
+mkdir -p /data/contrainers
+cd /data/contrainers
+git clone <repository-url> cli-rush
+cd cli-rush
+```
+
+### 2. Configure the public address
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` and set the final HTTPS address used through Nginx:
+
+```dotenv
+CLI_RUSH_USERNAME=ignas
+CLI_RUSH_PUBLIC_ORIGIN=https://cli-rush.example.com
+```
+
+### 3. Create the login secrets
+
+Run this from an interactive terminal. The password is not placed in shell history. If Node.js 24 is installed on the host:
+
+```bash
+node scripts/init-secrets.mjs
+```
+
+Or use Docker itself, without installing Node.js on the host:
+
+```bash
+docker run --rm -it -v "$PWD:/app" -w /app node:24-alpine node scripts/init-secrets.mjs
+```
+
+The generated `secrets/` directory is ignored by Git. Back it up securely. Rotating `session_secret` signs every existing session out.
+
+### 4. Build and start
+
+```bash
+docker compose up -d --build
+docker compose ps
+```
+
+The application listens only on `127.0.0.1:3080`. It is not directly exposed to the network.
+
+### 5. Configure Nginx
+
+Use `deploy/nginx.conf.example` as the starting point. Replace the hostname and add the existing TLS certificate directives. The important controls are:
+
+- HTTPS only.
+- Proxy to `http://127.0.0.1:3080`.
+- Overwrite forwarded IP and scheme headers.
+- Do not expose port 3080 through the firewall.
+- Rate-limit `/login`.
+
+After Nginx is active, open the configured HTTPS URL and sign in with the single configured username and password.
+
+## Persistent data
+
+`compose.yaml` mounts:
+
+```text
+/data/contrainers/cli-rush/data -> /data
+```
+
+Custom command content survives container rebuilds. Learning progress remains local to the browser, preserving the original local-first model.
+
+## Custom commands
+
+Use **Manage commands** from the application header. Each custom entry contains:
+
+- Question or operational objective
+- Correct command
+- Explanation shown after timeout
+- CLI mode
+- Verification, configuration or navigation type
+- Topic and difficulty
+
+Custom entries are data only. They cannot contain JavaScript, regular expressions, shell actions or simulator functions.
+
+## Known limitations
+
+- The expanded pack prioritises CCNA-level recall. It is not a complete command reference.
+- Most expanded commands are deterministic recall items rather than full stateful emulation.
+- Platform differences still need formal lab-image review and content metadata.
+- Local learning progress is not yet synchronised through the Docker volume.
+- Login rate limits reset when the container restarts; Nginx provides a second rate-limit layer.

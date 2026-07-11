@@ -1,4 +1,6 @@
-export type CliMode = "user" | "privileged" | "global" | "interface" | "router";
+import { expandedCommands } from "./expanded-catalogue.ts";
+
+export type CliMode = "user" | "privileged" | "global" | "interface" | "router" | "line" | "vlan" | "acl" | "dhcp";
 export type CommandKind = "navigation" | "verification" | "configuration";
 
 export interface Command {
@@ -10,6 +12,7 @@ export interface Command {
   topic: string;
   difficulty: 1 | 2 | 3;
   kind: CommandKind;
+  custom?: boolean;
 }
 
 const c = (id: string, mode: CliMode, canonical: string, objective: string, topic: string, kind: CommandKind, difficulty: 1 | 2 | 3 = 1): Command =>
@@ -32,7 +35,7 @@ const explanations: Record<string, string> = {
   "router.network": "Matches the documentation subnet for simulated OSPF area 0.",
 };
 
-export const commands: Command[] = [
+const coreCommands: Command[] = [
   c("nav.enable", "user", "enable", "Enter privileged EXEC mode.", "CLI navigation", "navigation"),
   c("tools.ping", "user", "ping 192.0.2.1", "Test IPv4 reachability to 192.0.2.1.", "Connectivity", "verification"),
   c("tools.traceroute", "user", "traceroute 198.51.100.10", "Trace the simulated path to 198.51.100.10.", "Connectivity", "verification", 2),
@@ -71,8 +74,20 @@ export const commands: Command[] = [
   c("nav.end-router", "router", "end", "Return directly to Privileged EXEC mode.", "CLI navigation", "navigation"),
 ];
 
+export const commands: Command[] = [...coreCommands, ...expandedCommands];
+
 export const commandById = new Map(commands.map(command => [command.id, command]));
-export const modeNames: Record<CliMode, string> = { user: "User EXEC", privileged: "Privileged EXEC", global: "Global configuration", interface: "Interface configuration", router: "Router configuration" };
+export const modeNames: Record<CliMode, string> = {
+  user: "User EXEC",
+  privileged: "Privileged EXEC",
+  global: "Global configuration",
+  interface: "Interface configuration",
+  router: "Router configuration",
+  line: "Line configuration",
+  vlan: "VLAN configuration",
+  acl: "Named ACL configuration",
+  dhcp: "DHCP pool configuration",
+};
 
 export type ErrorCode = "EMPTY" | "TOO_LONG" | "WRONG_MODE" | "MISSING_KEYWORD" | "MISSING_ARGUMENT" | "KEYWORD_ORDER" | "EXTRA_INPUT" | "INVALID_IPV4" | "INVALID_MASK" | "MASK_KIND" | "INVALID_INTERFACE" | "WRONG_VALUE" | "VERIFY_NOT_CONFIGURE" | "CONFIGURE_NOT_VERIFY" | "WRONG_OBJECTIVE" | "UNSUPPORTED";
 export type Validation = { ok: true; command: Command; input: string } | { ok: false; input: string; code: ErrorCode; message: string };
@@ -103,12 +118,12 @@ const syntaxError = (input:string, expected:Command): Validation | null => {
   return null;
 };
 
-export const validate = (raw:string, mode:CliMode, expectedId:string):Validation => {
+export const validate = (raw:string, mode:CliMode, expectedId:string, catalogue:Command[]=commands):Validation => {
   const input=normalise(raw); if(!input) return {ok:false,input,code:"EMPTY",message:"Type a command before submitting."};
   if(input.length>256) return {ok:false,input,code:"TOO_LONG",message:"The command exceeds the simulator limit."};
-  const expected=commandById.get(expectedId); if(!expected) throw new Error(`Unknown command ${expectedId}`);
+  const expected=catalogue.find(command=>command.id===expectedId); if(!expected) throw new Error(`Unknown command ${expectedId}`);
   if(same(input,expected.canonical)) return mode===expected.mode?{ok:true,input,command:expected}:{ok:false,input,code:"WRONG_MODE",message:`Correct command, but it belongs in ${modeNames[expected.mode]} mode. The current prompt is ${modeNames[mode]} mode.`};
-  const other=commands.find(x=>x.id!==expected.id&&same(x.canonical,input));
+  const other=catalogue.find(x=>x.id!==expected.id&&same(x.canonical,input));
   if(other) {
     if(other.mode!==mode) return {ok:false,input,code:"WRONG_MODE",message:`That command is valid from ${modeNames[other.mode]} mode, not ${modeNames[mode]} mode.`};
     if(expected.kind==="configuration"&&other.kind==="verification") return {ok:false,input,code:"VERIFY_NOT_CONFIGURE",message:"That verifies state, but this objective requires a configuration change."};
@@ -121,7 +136,7 @@ export const validate = (raw:string, mode:CliMode, expectedId:string):Validation
 export interface DeviceState { hostname:string; mode:CliMode; selectedInterface:string; ipv4:string|null; mask:string|null; adminUp:boolean; description:string; routes:string[]; startup:string|null; }
 export const initialDevice=():DeviceState=>({hostname:"R1",mode:"user",selectedInterface:"GigabitEthernet0/1",ipv4:null,mask:null,adminUp:false,description:"",routes:[],startup:null});
 export const prepare=(state:DeviceState, command:Command):DeviceState=>({...state,mode:command.mode});
-export const prompt=(s:DeviceState)=>`${s.hostname}${s.mode==="user"?">":s.mode==="privileged"?"#":s.mode==="global"?"(config)#":s.mode==="interface"?"(config-if)#":"(config-router)#"}`;
+export const prompt=(s:DeviceState)=>`${s.hostname}${s.mode==="user"?">":s.mode==="privileged"?"#":s.mode==="global"?"(config)#":s.mode==="interface"?"(config-if)#":s.mode==="router"?"(config-router)#":s.mode==="line"?"(config-line)#":s.mode==="vlan"?"(config-vlan)#":s.mode==="acl"?"(config-ext-nacl)#":"(dhcp-config)#"}`;
 export const runningConfig=(s:DeviceState)=>[`hostname ${s.hostname}`,"interface GigabitEthernet0/1",s.description?` description ${s.description}`:"",s.ipv4?` ip address ${s.ipv4} ${s.mask}`:"",s.adminUp?" no shutdown":" shutdown",...s.routes,"end"].filter(Boolean).join("\n");
 export const applyCommand=(state:DeviceState, command:Command):{state:DeviceState;output:string[]}=>{
   const s:DeviceState=JSON.parse(JSON.stringify(state)); let output:string[]=[];
@@ -138,7 +153,13 @@ export const applyCommand=(state:DeviceState, command:Command):{state:DeviceStat
     case"show.version":output=["IOS XE educational simulator, Version 17.9",`${s.hostname} uptime is 3 days, 4 hours`];break;
     case"tools.ping":output=["!!!!!","Success rate is 100 percent (5/5)"];break; case"tools.traceroute":output=["1 192.0.2.254 1 ms","2 198.51.100.10 3 ms"];break;
   }
+  if (command.id.startsWith("nav.line")) s.mode="line";
+  if (command.id.startsWith("nav.vlan")) s.mode="vlan";
+  if (command.id.startsWith("nav.acl")) s.mode="acl";
+  if (command.id.startsWith("nav.dhcp")) s.mode="dhcp";
+  if (command.id.startsWith("nav.exit-") && ["line","vlan","acl","dhcp"].some(mode=>command.id.endsWith(mode))) s.mode="global";
+  if (command.id.startsWith("nav.end-") && ["line","vlan","acl","dhcp"].some(mode=>command.id.endsWith(mode))) s.mode="privileged";
   return {state:s,output};
 };
 
-export const seededOrder=(seed:number)=>{const a=commands.map(x=>x.id);let v=seed||1;for(let i=a.length-1;i>0;i--){v=(v*1664525+1013904223)>>>0;const j=Math.floor((v/4294967296)*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;};
+export const seededOrder=(seed:number,catalogue:Command[]=commands)=>{const a=catalogue.map(x=>x.id);let v=seed||1;for(let i=a.length-1;i>0;i--){v=(v*1664525+1013904223)>>>0;const j=Math.floor((v/4294967296)*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;};

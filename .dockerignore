@@ -1,0 +1,10 @@
+.git
+.github
+.sites-runtime
+.wrangler
+dist
+node_modules
+data
+secrets
+.env
+npm-debug.log*
