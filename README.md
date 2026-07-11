@@ -15,6 +15,11 @@ This is an independent educational simulator. It is not affiliated with or endor
 - IOS-style `Tab` completion expands only unique prefixes in the current CLI mode.
 - Inline `?` help lists deterministic next-token options without submitting the command or directly changing score or time.
 - A correct CLI-assisted answer keeps its normal score and time reward but cannot advance mastery.
+- Physical `Tab` and `?` keep focus and the caret at the end of the simulated command line; equivalent touch controls remain available.
+- PuTTY-style clipboard flow: selecting terminal output copies it, Ctrl+V pastes, and right-click pastes directly when browser clipboard permission is available.
+- Every run uses a weighted random queue that cannot repeat the previous opening command string.
+- IPv4 receives the strongest protocol weighting; IPv6 remains in lower-frequency rotation.
+- Correct, assisted and fully revealed commands receive progressively higher revisit weight.
 - Normal starts with sixty seconds, adds three seconds for a correct command or five seconds from a three-answer clean streak, and removes one, three then five seconds across consecutive errors.
 - Hard starts with sixty seconds, always adds three seconds for a correct command, and removes five, ten then fifteen seconds across consecutive errors.
 - Hardcore starts with sixty seconds, adds two seconds for a correct command and ends immediately after one incorrect submission.
@@ -22,6 +27,7 @@ This is an independent educational simulator. It is not affiliated with or endor
 - User EXEC, Privileged EXEC, Global, Interface, Router, Line, VLAN, named ACL and DHCP-pool modes.
 - Deterministic local validation. Player input is never executed.
 - Specific error feedback during the round.
+- Explanation and practical use-case feedback after both correct and incorrect submissions; timed mistakes do not leak hidden canonical text.
 - Wrong answers move on without revealing the correct command.
 - A later retry earns reduced score and does not advance mastery.
 - An objective left unanswered when time expires is added to the missed review.
@@ -39,6 +45,7 @@ app/page.tsx                 Responsive game, report and custom-command UI
 lib/engine.ts                Parser, CLI modes and simulator
 lib/expanded-catalogue.ts    Curated built-in command pack
 lib/cli-assistance.ts        Deterministic Tab completion and question-mark menus
+lib/command-queue.ts         Weighted adaptive random command ordering
 lib/game-modes.ts            Deterministic game-mode time rules
 lib/learning.ts              Deterministic Easy-mode learning aids
 lib/scheduler.ts             Review scheduling and score calculation

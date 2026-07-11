@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { commands, type Command } from "../../lib/engine.ts";
-import { learningHintsFor, learningPoints, maskedCommandShape } from "../../lib/learning.ts";
+import {
+  acceptedCommandContext,
+  learningHintsFor,
+  learningPoints,
+  maskedCommandShape,
+  safeCommandContext,
+} from "../../lib/learning.ts";
 
 const commandById = (id: string): Command => {
   const command = commands.find((candidate) => candidate.id === id);
@@ -103,4 +109,20 @@ test("learning points reward recall and streaks without crediting a reveal", () 
   assert.equal(learningPoints(2, 2, 3, 0), 66);
   assert.equal(learningPoints(3, 1, 20, 0), 188);
   assert.equal(learningPoints(3, 1, 20, 2), 0);
+});
+
+test("every result can explain the concept and a practical use case safely", () => {
+  for (const command of commands) {
+    const safe = safeCommandContext(command);
+    const accepted = acceptedCommandContext(command);
+    assert.match(safe.explanation, /\S/u, command.id);
+    assert.match(safe.useCase, /^Use it /u, command.id);
+    assert.equal(
+      safe.explanation.toLocaleLowerCase("en-GB").includes(command.canonical.toLocaleLowerCase("en-GB")),
+      false,
+      command.id,
+    );
+    assert.equal(accepted.explanation, command.explanation, command.id);
+    assert.match(accepted.useCase, /^Use it /u, command.id);
+  }
 });

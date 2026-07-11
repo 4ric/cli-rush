@@ -30,3 +30,4 @@ html{min-width:320px;overflow-x:hidden}body{min-width:0}.shell{min-height:100dvh
 
 .terminal form button.cli-assist{min-width:48px;background:transparent;color:var(--cyan);text-transform:uppercase}
 @media(max-width:650px){.terminal form button.cli-assist{min-width:40px;padding:0 6px}}
+.terminal .log{cursor:text;user-select:text;-webkit-user-select:text}

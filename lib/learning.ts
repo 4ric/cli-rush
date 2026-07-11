@@ -14,6 +14,11 @@ export interface EasyLearningHints {
 
 export type AssistanceLevel = 0 | 1 | 2;
 
+export interface CommandContext {
+  explanation: string;
+  useCase: string;
+}
+
 export const learningPoints = (
   difficulty: Command["difficulty"],
   attempt: number,
@@ -35,6 +40,36 @@ const strategies: Record<Command["kind"], string> = {
   configuration:
     "Turn the objective into four roles: feature, action, target and value. Check the current CLI context, then retrieve those roles in order.",
 };
+
+const safeExplanations: Record<Command["kind"], (topic: string) => string> = {
+  navigation: (topic) =>
+    `This is a CLI navigation task for ${topic}. It changes the active prompt or command context without exposing the required answer.`,
+  verification: (topic) =>
+    `This is a verification task in the ${topic} area. It reads device state so an operator can confirm what the simulator is doing.`,
+  configuration: (topic) =>
+    `This is a configuration task in the ${topic} area. It changes device state and should be entered from the requested CLI context.`,
+};
+
+const useCases: Record<Command["kind"], (topic: string) => string> = {
+  navigation: () =>
+    "Use it when moving to the prompt required before the next operational step.",
+  verification: () =>
+    "Use it during baseline checks, fault isolation and validation after a change.",
+  configuration: (topic) =>
+    `Use it when deploying or correcting ${topic.toLocaleLowerCase("en-GB")} settings.`,
+};
+
+/** Safe to show after a wrong timed answer because it omits canonical text. */
+export const safeCommandContext = (command: Command): CommandContext => ({
+  explanation: safeExplanations[command.kind](command.topic),
+  useCase: useCases[command.kind](command.topic),
+});
+
+/** Full post-answer explanation for an accepted command. */
+export const acceptedCommandContext = (command: Command): CommandContext => ({
+  explanation: command.explanation,
+  useCase: useCases[command.kind](command.topic),
+});
 
 const rhythms: Record<Command["kind"], readonly string[]> = {
   navigation: ["movement", "destination", "scope"],

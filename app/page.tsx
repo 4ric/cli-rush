@@ -2,8 +2,10 @@
 "use client";
 
 import {
+  type ClipboardEvent,
   type FormEvent,
   type KeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -17,7 +19,6 @@ import {
   modeNames,
   prepare,
   prompt,
-  seededOrder,
   validate,
   type CliMode,
   type Command,
@@ -34,14 +35,17 @@ import {
   type GameModeRules,
 } from "@/lib/game-modes.ts";
 import {
+  acceptedCommandContext,
   learningHintsFor,
   learningPoints,
+  safeCommandContext,
   type AssistanceLevel,
 } from "@/lib/learning.ts";
 import {
   cliHelp,
   completeCliInput,
 } from "@/lib/cli-assistance.ts";
+import { weightedCommandQueue } from "@/lib/command-queue.ts";
 import {
   acceptedAttemptPolicy,
   failureFeedback,
@@ -66,6 +70,8 @@ interface CommandProgress {
   correct: number;
   firstTry: number;
   lastError: string | null;
+  assisted?: number;
+  revealed?: number;
   review?: Review;
 }
 
@@ -79,6 +85,7 @@ interface Progress {
   muted: boolean;
   reducedMotion: boolean;
   lastMode: GameModeId;
+  lastFirstCommandId: string | null;
 }
 
 interface Round {
@@ -127,6 +134,7 @@ const blankProgress = (): Progress => ({
   muted: false,
   reducedMotion: false,
   lastMode: "easy",
+  lastFirstCommandId: null,
 });
 
 const blankRound = (): Round => ({
@@ -212,6 +220,9 @@ const hydrateProgress = (value: unknown): Progress => {
       ? candidate.commands
       : {},
     lastMode: isGameMode(candidate.lastMode) ? candidate.lastMode : "easy",
+    lastFirstCommandId: typeof candidate.lastFirstCommandId === "string"
+      ? candidate.lastFirstCommandId
+      : null,
   };
 };
 
@@ -256,12 +267,13 @@ export default function GameClient() {
   const submittedForCurrentObjective = useRef(false);
   const consecutiveWrong = useRef(0);
   const cliAssisted = useRef(false);
+  const assistanceRecorded = useRef({ assisted: false, revealed: false });
   const timeChangeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const advanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const timerLastTick = useRef<number | null>(null);
   const pausedAt = useRef<number | null>(null);
 
-  const [queue, setQueue] = useState(() => seededOrder(1));
+  const [queue, setQueue] = useState(() => commands.map((command) => command.id));
   const [cursor, setCursor] = useState(0);
   const [device, setDevice] = useState<DeviceState>(initialDevice);
   const [time, setTime] = useState<number | null>(null);
@@ -362,6 +374,7 @@ export default function GameClient() {
     setPresentationAttempt((roundAttempts.current.get(item.id) ?? 0) + 1);
     setAssistance(0);
     cliAssisted.current = false;
+    assistanceRecorded.current = { assisted: false, revealed: false };
     setCliAssistanceUsed(false);
     setEasyComplete(false);
     setDevice((current) => prepare(current, item));
@@ -473,6 +486,7 @@ export default function GameClient() {
       commands: {
         ...current.commands,
         [id]: {
+          ...old,
           attempts: (old?.attempts ?? 0) + count,
           correct: (old?.correct ?? 0) + 1,
           firstTry: (old?.firstTry ?? 0) + (first ? 1 : 0),
@@ -495,6 +509,7 @@ export default function GameClient() {
       commands: {
         ...current.commands,
         [id]: {
+          ...old,
           attempts: (old?.attempts ?? 0) + 1,
           correct: (old?.correct ?? 0) + (correct ? 1 : 0),
           firstTry: old?.firstTry ?? 0,
@@ -513,11 +528,36 @@ export default function GameClient() {
       commands: {
         ...current.commands,
         [id]: {
+          ...old,
           attempts: (old?.attempts ?? 0) + 1,
           correct: (old?.correct ?? 0) + 1,
           firstTry: old?.firstTry ?? 0,
           lastError: null,
           review: old?.review,
+        },
+      },
+    });
+  }, [save]);
+
+  const recordCommandAssistance = useCallback((
+    id: string,
+    kind: "assisted" | "revealed",
+  ) => {
+    if (assistanceRecorded.current[kind]) return;
+    assistanceRecorded.current[kind] = true;
+    const current = progressRef.current;
+    const old = current.commands[id];
+    save({
+      ...current,
+      commands: {
+        ...current.commands,
+        [id]: {
+          ...old,
+          attempts: old?.attempts ?? 0,
+          correct: old?.correct ?? 0,
+          firstTry: old?.firstTry ?? 0,
+          lastError: old?.lastError ?? null,
+          [kind]: (old?.[kind] ?? 0) + 1,
         },
       },
     });
@@ -531,6 +571,7 @@ export default function GameClient() {
       commands: {
         ...current.commands,
         [id]: {
+          ...old,
           attempts: (old?.attempts ?? 0) + count,
           correct: old?.correct ?? 0,
           firstTry: old?.firstTry ?? 0,
@@ -671,9 +712,21 @@ export default function GameClient() {
     const mode = selectedMode;
     const rules = gameModeById(mode);
     const nextRound = blankRound();
+    const currentProgress = progressRef.current;
+    const random = () => {
+      const value = new Uint32Array(1);
+      crypto.getRandomValues(value);
+      return value[0] / 0x1_0000_0000;
+    };
+    const nextQueue = weightedCommandQueue(
+      catalogue,
+      currentProgress.commands,
+      currentProgress.lastFirstCommandId,
+      random,
+    );
     setActiveMode(mode);
     setRoundBoth(nextRound);
-    setQueue(seededOrder(progressRef.current.sessions + 1, catalogue));
+    setQueue(nextQueue);
     setCursor(0);
     setDevice(initialDevice());
     setTime(initialTimeMs(mode));
@@ -702,7 +755,11 @@ export default function GameClient() {
     reviewBaselines.current.clear();
     submittedForCurrentObjective.current = false;
     consecutiveWrong.current = 0;
-    save({ ...progressRef.current, lastMode: mode });
+    save({
+      ...currentProgress,
+      lastMode: mode,
+      lastFirstCommandId: nextQueue[0] ?? null,
+    });
     setScreen("round");
   };
 
@@ -713,6 +770,8 @@ export default function GameClient() {
   };
 
   const showAssistance = (level: Exclude<AssistanceLevel, 0>) => {
+    recordCommandAssistance(item.id, "assisted");
+    if (level === 2) recordCommandAssistance(item.id, "revealed");
     setAssistance(level);
     setTimeout(() => learningAidRef.current?.focus(), 0);
   };
@@ -734,11 +793,22 @@ export default function GameClient() {
   };
 
   const markCliAssisted = () => {
+    recordCommandAssistance(item.id, "assisted");
     cliAssisted.current = true;
     setCliAssistanceUsed(true);
   };
 
-  const completeCommandInput = (value = input, restoreFocus = false) => {
+  const focusInputAtEnd = () => {
+    setTimeout(() => {
+      const commandInput = inputRef.current;
+      if (!commandInput) return;
+      commandInput.focus();
+      const end = commandInput.value.length;
+      commandInput.setSelectionRange(end, end);
+    }, 0);
+  };
+
+  const completeCommandInput = (value = input) => {
     const completion = completeCliInput(value, device.mode, catalogue);
     if (completion.assisted) markCliAssisted();
     if (completion.changed) {
@@ -750,11 +820,11 @@ export default function GameClient() {
       title: completion.changed ? "Tab completion · no penalty" : "No unique completion",
       message: `${completion.message} No score or time-bank adjustment was made.`,
     });
-    if (restoreFocus) setTimeout(() => inputRef.current?.focus(), 0);
+    focusInputAtEnd();
     return completion.changed;
   };
 
-  const showCliOptions = (value = input, restoreFocus = false) => {
+  const showCliOptions = (value = input) => {
     const result = cliHelp(value, device.mode, catalogue);
     if (result.assisted) markCliAssisted();
     const optionLines = result.options.map((option) =>
@@ -772,7 +842,75 @@ export default function GameClient() {
       title: result.assisted ? "Context help · no penalty" : "No context options",
       message: `${result.message} No score or time-bank adjustment was made; timed clocks continue normally.`,
     });
-    if (restoreFocus) setTimeout(() => inputRef.current?.focus(), 0);
+    focusInputAtEnd();
+  };
+
+  const insertClipboardText = (
+    clipboardText: string,
+    currentValue: string,
+    selectionStart: number,
+    selectionEnd: number,
+  ) => {
+    const clean = clipboardText.replace(/\s+/gu, " ").trim();
+    if (!clean) return;
+    const before = currentValue.slice(0, selectionStart);
+    const after = currentValue.slice(selectionEnd);
+    const next = `${before}${clean}${after}`.slice(0, 256);
+    const caret = Math.min(next.length, before.length + clean.length);
+    setInput(next);
+    setHistoryAt(-1);
+    setTimeout(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(caret, caret);
+    }, 0);
+  };
+
+  const pasteCommand = (event: ClipboardEvent<HTMLInputElement>) => {
+    event.preventDefault();
+    insertClipboardText(
+      event.clipboardData.getData("text"),
+      event.currentTarget.value,
+      event.currentTarget.selectionStart ?? event.currentTarget.value.length,
+      event.currentTarget.selectionEnd ?? event.currentTarget.value.length,
+    );
+  };
+
+  const pasteCommandOnRightClick = async (event: ReactMouseEvent<HTMLInputElement>) => {
+    event.preventDefault();
+    const currentValue = event.currentTarget.value;
+    const selectionStart = event.currentTarget.selectionStart ?? currentValue.length;
+    const selectionEnd = event.currentTarget.selectionEnd ?? currentValue.length;
+    try {
+      const clipboardText = await navigator.clipboard.readText();
+      insertClipboardText(clipboardText, currentValue, selectionStart, selectionEnd);
+      setFeedback({
+        tone: "neutral",
+        title: "Clipboard pasted",
+        message: "Right-click paste is active, matching the usual PuTTY workflow.",
+      });
+    } catch {
+      setFeedback({
+        tone: "error",
+        title: "Clipboard permission blocked",
+        message: "Use Ctrl+V, or allow clipboard access for this local site and right-click again.",
+      });
+    }
+  };
+
+  const copyTerminalSelection = () => {
+    const selection = window.getSelection();
+    const selectedText = selection?.toString() ?? "";
+    if (!selectedText.trim() || !selection || !logRef.current) return;
+    const selectionIsInLog = [selection.anchorNode, selection.focusNode]
+      .every((node) => node && logRef.current?.contains(node));
+    if (!selectionIsInLog) return;
+    void navigator.clipboard.writeText(selectedText).then(() => {
+      setFeedback({
+        tone: "neutral",
+        title: "Terminal selection copied",
+        message: "The selected terminal text is now on the clipboard; paste it with Ctrl+V or right-click.",
+      });
+    }).catch(() => {});
   };
 
   const submit = (event: FormEvent) => {
@@ -791,6 +929,8 @@ export default function GameClient() {
     const usedCliAssistance = cliAssisted.current;
     roundAttempts.current.set(item.id, attempt);
     const currentPrompt = prompt(device);
+    const safeContext = safeCommandContext(item);
+    const safeContextLine = `Why: ${safeContext.explanation} Use case: ${safeContext.useCase}`;
     setHistory((values) => [...values, result.input].slice(-20));
     setHistoryAt(-1);
 
@@ -814,10 +954,12 @@ export default function GameClient() {
         };
         setRoundBoth(nextRound);
         updatePracticeCommand(item.id, false, code);
+        if (assistance === 0) recordCommandAssistance(item.id, "assisted");
         setLines((values) => [
           ...values,
           `${currentPrompt} ${result.input}`,
           `% ${result.message}`,
+          safeContextLine,
           "Learning coach opened the command shape. Try the same objective again.",
         ].slice(-60));
         setInput("");
@@ -826,7 +968,7 @@ export default function GameClient() {
         setFeedback({
           tone: "error",
           title: errorNames[code] ?? "Keep learning",
-          message: `${result.message} Stay on this objective and try again; mastery is unchanged.`,
+          message: `${result.message} ${safeContext.explanation} ${safeContext.useCase} Stay on this objective and try again; mastery is unchanged.`,
         });
         tone(false);
         setTimeout(() => inputRef.current?.focus(), 0);
@@ -864,12 +1006,13 @@ export default function GameClient() {
           ...values,
           `${currentPrompt} ${result.input}`,
           `% ${result.message}`,
+          safeContextLine,
           "✕ Hardcore run ended · answer remains hidden",
         ].slice(-60));
         setFeedback({
           tone: "error",
           title: "Hardcore run ended",
-          message: "One incorrect command ended this run. The answer remains hidden because the timer did not expire.",
+          message: `One incorrect command ended this run. ${safeContext.explanation} ${safeContext.useCase} The answer remains hidden because the timer did not expire.`,
         });
         finish("hardcore");
         return;
@@ -881,6 +1024,7 @@ export default function GameClient() {
         ...values,
         `${currentPrompt} ${result.input}`,
         `% ${result.message}`,
+        safeContextLine,
         `▼ ${seconds(lostMs)} seconds lost · error tier ${effect.nextConsecutiveWrong}`,
       ].slice(-60));
       if (!retried.current.has(item.id)) {
@@ -894,7 +1038,7 @@ export default function GameClient() {
       setFeedback({
         tone: "error",
         title: `${errorNames[code] ?? "Command error"} · −${seconds(lostMs)}s`,
-        message: failureFeedback(result.message),
+        message: `${failureFeedback(result.message)} ${safeContext.explanation} ${safeContext.useCase}`,
       });
       setAdvancing(true);
       scheduleAdvance(progressRef.current.reducedMotion ? 250 : 700);
@@ -903,6 +1047,8 @@ export default function GameClient() {
 
     const responseMs = Math.max(0, performance.now() - startedAt);
     const simulation = applyCommand(device, item);
+    const acceptedContext = acceptedCommandContext(item);
+    const acceptedContextLine = `Why: ${acceptedContext.explanation} Use case: ${acceptedContext.useCase}`;
 
     if (activeMode === "easy") {
       const learningStreak = roundRef.current.combo + 1;
@@ -932,6 +1078,7 @@ export default function GameClient() {
         ...values,
         `${currentPrompt} ${result.input}`,
         ...simulation.output,
+        acceptedContextLine,
         points
           ? `✓ +${points} learning points · ${learningStreak}x streak`
           : "✓ Reinforcement complete · revealed answer earns no points",
@@ -939,7 +1086,7 @@ export default function GameClient() {
       setFeedback({
         tone: "success",
         title: points ? `Command learned · +${points}` : "Command reinforced",
-        message: item.explanation,
+        message: `${acceptedContext.explanation} ${acceptedContext.useCase}`,
       });
       setInput("");
       setEasyComplete(true);
@@ -993,6 +1140,7 @@ export default function GameClient() {
       ...values,
       `${currentPrompt} ${result.input}`,
       ...simulation.output,
+      acceptedContextLine,
       `✓ +${points} points · +${seconds(timeEffect.timeDeltaMs)}s · ${award}`,
     ].slice(-60));
     setFeedback({
@@ -1001,10 +1149,10 @@ export default function GameClient() {
         ? `Command accepted · +${seconds(timeEffect.timeDeltaMs)}s`
         : `Recovered on retry · +${seconds(timeEffect.timeDeltaMs)}s`,
       message: usedCliAssistance
-        ? `${item.explanation} +${points} points with the full time reward; CLI assistance leaves mastery unchanged.`
+        ? `${acceptedContext.explanation} ${acceptedContext.useCase} +${points} points with the full time reward; CLI assistance leaves mastery unchanged.`
         : policy.firstTry
-        ? `${item.explanation} +${points} points.`
-        : `${item.explanation} +${points} reduced retry points; the mastery interval did not advance.`,
+        ? `${acceptedContext.explanation} ${acceptedContext.useCase} +${points} points.`
+        : `${acceptedContext.explanation} ${acceptedContext.useCase} +${points} reduced retry points; the mastery interval did not advance.`,
     });
     setInput("");
     setAdvancing(true);
@@ -1014,11 +1162,11 @@ export default function GameClient() {
 
   const commandKeys = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Tab" && !event.shiftKey) {
-      const completed = completeCommandInput(event.currentTarget.value);
-      if (completed) event.preventDefault();
+      event.preventDefault();
+      completeCommandInput(event.currentTarget.value);
       return;
     }
-    if (event.key === "?") {
+    if (event.key === "?" || event.code === "Slash" && event.shiftKey) {
       event.preventDefault();
       showCliOptions(event.currentTarget.value);
       return;
@@ -1080,6 +1228,12 @@ export default function GameClient() {
   const reportHasHiddenMisses = Boolean(
     report && !reportCanReveal && report.round.missed.length > 0,
   );
+  const reportFocusCommand = report
+    ? catalogue.find((command) => command.id === report.round.missed[0])
+    : undefined;
+  const reportFocusContext = reportFocusCommand
+    ? safeCommandContext(reportFocusCommand)
+    : null;
 
   const reportHeading = report?.reason === "practice"
     ? "Practice complete."
@@ -1132,7 +1286,8 @@ export default function GameClient() {
             <h1>Learn the language.<em>Build command reflexes.</em></h1>
             <p className="lead">
               Start with guided, untimed practice even if every Cisco command is new.
-              Move into timed recall when the patterns begin to stick.
+              Move into timed recall when the patterns begin to stick. Each run is
+              randomised, weighted towards IPv4 and adapts to your assisted history.
             </p>
             <dl>
               <div><dt>{selectedMode === "easy" ? "Learning mode" : `${selectedRules.label} best`}</dt><dd>{selectedBest ?? "—"}</dd></div>
@@ -1276,7 +1431,7 @@ export default function GameClient() {
               </div>
             ) : (
               <>
-                <div className="log" ref={logRef} role="log">
+                <div className="log" ref={logRef} role="log" onMouseUp={copyTerminalSelection} title="Select text to copy it, as in PuTTY">
                   {lines.map((line, index) => <div key={`${index}-${line}`}>{line}</div>)}
                 </div>
                 <form onSubmit={submit}>
@@ -1290,15 +1445,16 @@ export default function GameClient() {
                     value={input}
                     onChange={(event) => changeCommandInput(event.target.value)}
                     onKeyDown={commandKeys}
-                    onPaste={(event) => event.preventDefault()}
+                    onPaste={pasteCommand}
+                    onContextMenu={(event) => void pasteCommandOnRightClick(event)}
                     autoComplete="off"
                     autoCorrect="off"
                     spellCheck={false}
                     maxLength={256}
                     disabled={advancing}
                   />
-                  <button className="cli-assist" type="button" onClick={() => completeCommandInput(input, true)} disabled={advancing} aria-label="Complete command with Tab">Tab</button>
-                  <button className="cli-assist" type="button" onClick={() => showCliOptions(input, true)} disabled={advancing} aria-label="Show context options with question mark">?</button>
+                  <button className="cli-assist" type="button" onClick={() => completeCommandInput(input)} disabled={advancing} aria-label="Complete command with Tab">Tab</button>
+                  <button className="cli-assist" type="button" onClick={() => showCliOptions(input)} disabled={advancing} aria-label="Show context options with question mark">?</button>
                   <button type="submit" disabled={advancing}>Run</button>
                 </form>
               </>
@@ -1313,10 +1469,10 @@ export default function GameClient() {
           )}
           <p className="help">
             {activeMode === "easy"
-              ? "Tab completes unique text · ? lists options · No score/time penalty · Easy never changes mastery"
+              ? "Tab/? stay at the prompt · Select terminal text to copy · Right-click or Ctrl+V pastes · Easy never changes mastery"
               : activeMode === "hardcore"
-                ? "Tab completes · ? lists options · Help has no direct penalty · One incorrect submission ends the run"
-                : "Tab completes unique text · ? lists options · Help has no direct score/time penalty · Enter submits"}
+                ? "Tab/? stay at the prompt · Select copies · Right-click or Ctrl+V pastes · One incorrect submission ends the run"
+                : "Tab/? stay at the prompt · Select terminal text to copy · Right-click or Ctrl+V pastes · Enter submits"}
           </p>
         </section>
       )}
@@ -1349,7 +1505,7 @@ export default function GameClient() {
             <div>
               <small>{report.reason === "hardcore" ? "RUN-ENDING ERROR" : "MOST COMMON ERROR"}</small>
               <b>{commonError ? errorNames[commonError] : report.round.unanswered ? "Unanswered at the buzzer" : "No errors recorded"}</b>
-              <p>{commonError ? "This is the clearest target for deliberate practice." : report.round.unanswered ? "The final objective has been added to the review queue." : "Spacing will test whether this recall holds."}</p>
+              <p>{reportFocusContext ? `${reportFocusContext.explanation} ${reportFocusContext.useCase}` : commonError ? "This is the clearest target for deliberate practice." : report.round.unanswered ? "The final objective has been added to the review queue." : "Spacing will test whether this recall holds."}</p>
             </div>
             <div>
               <small>RECOMMENDED NEXT ACTION</small>
