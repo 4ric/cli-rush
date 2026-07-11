@@ -1,4 +1,6 @@
 import type { Command } from "./engine.ts";
+import { teachingFor } from "./command-teaching.ts";
+import { commandGrammarTokens } from "./cli-grammar.ts";
 
 export interface PreAnswerLearningAid {
   text: string;
@@ -7,12 +9,13 @@ export interface PreAnswerLearningAid {
 
 export interface EasyLearningHints {
   strategy: PreAnswerLearningAid;
-  shape: PreAnswerLearningAid;
+  structure: PreAnswerLearningAid;
+  family: PreAnswerLearningAid;
   reveal: PreAnswerLearningAid;
   postAnswerMnemonic: string;
 }
 
-export type AssistanceLevel = 0 | 1 | 2;
+export type AssistanceLevel = 0 | 1 | 2 | 3;
 
 export interface CommandContext {
   explanation: string;
@@ -25,8 +28,8 @@ export const learningPoints = (
   streak: number,
   assistance: AssistanceLevel,
 ): number => {
-  if (assistance === 2) return 0;
-  const assistanceMultiplier = assistance === 1 ? 0.5 : 1;
+  if (assistance === 3) return 0;
+  const assistanceMultiplier = assistance === 2 ? 0.35 : assistance === 1 ? 0.65 : 1;
   const attemptMultiplier = attempt === 1 ? 1 : 0.6;
   const streakMultiplier = 1 + Math.min(0.25, Math.max(0, streak - 1) * 0.05);
   return Math.round(50 * difficulty * assistanceMultiplier * attemptMultiplier * streakMultiplier);
@@ -50,26 +53,24 @@ const safeExplanations: Record<Command["kind"], (topic: string) => string> = {
     `This is a configuration task in the ${topic} area. It changes device state and should be entered from the requested CLI context.`,
 };
 
-const useCases: Record<Command["kind"], (topic: string) => string> = {
-  navigation: () =>
-    "Use it when moving to the prompt required before the next operational step.",
-  verification: () =>
-    "Use it during baseline checks, fault isolation and validation after a change.",
-  configuration: (topic) =>
-    `Use it when deploying or correcting ${topic.toLocaleLowerCase("en-GB")} settings.`,
-};
-
 /** Safe to show after a wrong timed answer because it omits canonical text. */
 export const safeCommandContext = (command: Command): CommandContext => ({
   explanation: safeExplanations[command.kind](command.topic),
-  useCase: useCases[command.kind](command.topic),
+  useCase: command.kind === "navigation"
+    ? "Use it when moving to the prompt required before the next operational step."
+    : command.kind === "verification"
+      ? "Use it during baseline checks, fault isolation and validation after a change."
+      : `Use it when deploying or correcting ${command.topic.toLocaleLowerCase("en-GB")} settings.`,
 });
 
 /** Full post-answer explanation for an accepted command. */
-export const acceptedCommandContext = (command: Command): CommandContext => ({
-  explanation: command.explanation,
-  useCase: useCases[command.kind](command.topic),
-});
+export const acceptedCommandContext = (command: Command): CommandContext => {
+  const teaching = teachingFor(command);
+  return {
+    explanation: command.custom ? command.explanation : teaching.purpose,
+    useCase: teaching.whenToUse,
+  };
+};
 
 const rhythms: Record<Command["kind"], readonly string[]> = {
   navigation: ["movement", "destination", "scope"],
@@ -83,27 +84,25 @@ const mnemonicClosings: Record<Command["kind"], string> = {
   configuration: "Link the sequence to the state change you expect.",
 };
 
-const letterOrNumber = /[\p{L}\p{N}]/u;
-
 const tokensOf = (canonical: string): string[] =>
   canonical.trim().split(/\s+/u).filter(Boolean);
 
-const tokenInitial = (token: string): string =>
-  Array.from(token).find((character) => letterOrNumber.test(character)) ?? "•";
+const valueToken = /^(?:\d|[0-9a-f]*:)|[.:/@#]/iu;
 
-const maskedToken = (token: string): string => {
-  const length = Array.from(token).length;
-  if (length === 0) return "";
-  return `${tokenInitial(token)}${"•".repeat(length - 1)}[${length}]`;
-};
+const semanticSlot = (token: string): string =>
+  valueToken.test(token) ? "[argument]" : "[keyword]";
 
 /**
- * Exposes only each whitespace-delimited token's first letter or digit and its
- * total character count. Every other character, including punctuation, is
- * replaced so addresses and command arguments are not disclosed accidentally.
+ * Exposes token roles without initials, character counts or literal values.
+ * This keeps a useful syntax scaffold without turning Tab into answer recovery.
  */
 export const maskedCommandShape = (canonical: string): string =>
-  tokensOf(canonical).map(maskedToken).join(" ");
+  tokensOf(canonical).map(semanticSlot).join(" → ");
+
+const semanticCommandShape = (command: Command): string =>
+  commandGrammarTokens(command)
+    .map((token) => token.kind === "argument" ? "[argument]" : "[keyword]")
+    .join(" → ");
 
 const chunksOf = (tokens: readonly string[]): string[] => {
   if (tokens.length === 0) return [];
@@ -122,11 +121,16 @@ const chunkingMnemonic = (command: Command): string => {
   }
 
   const chunks = chunksOf(tokens);
-  const orderCue = tokens.map(tokenInitial).join("–");
   const chunkSequence = chunks.map((chunk) => `“${chunk}”`).join(" → ");
   const rhythm = rhythms[command.kind].slice(0, chunks.length).join(" → ");
 
-  return `Use ${orderCue} as the order cue. Chunk the answer as ${chunkSequence}. Recall the rhythm ${rhythm}. ${mnemonicClosings[command.kind]}`;
+  return `Chunk the answer as ${chunkSequence}. Recall the rhythm ${rhythm}. ${mnemonicClosings[command.kind]}`;
+};
+
+const semanticStructures: Record<Command["kind"], string> = {
+  navigation: "Structure: [movement or context] → [destination or scope, if required].",
+  verification: "Structure: [read operation] → [feature or subject] → [optional detail].",
+  configuration: "Structure: [feature] → [action] → [target] → [value, where required].",
 };
 
 export const learningHintsFor = (command: Command): EasyLearningHints => ({
@@ -134,8 +138,12 @@ export const learningHintsFor = (command: Command): EasyLearningHints => ({
     text: strategies[command.kind],
     assisted: false,
   },
-  shape: {
-    text: maskedCommandShape(command.canonical),
+  structure: {
+    text: `${semanticStructures[command.kind]} Token roles: ${semanticCommandShape(command)}`,
+    assisted: true,
+  },
+  family: {
+    text: `Command family: ${tokensOf(command.canonical)[0] ?? "not available"}. Build the remaining keywords and arguments from the objective.`,
     assisted: true,
   },
   reveal: {

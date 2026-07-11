@@ -23,3 +23,49 @@
 .custom-list article>div{min-width:0}
 .custom-list article button{padding:8px 11px;border:1px solid rgba(255,122,114,.35);background:transparent;color:var(--red);font:650 9px var(--font-geist-mono);text-transform:uppercase}
 @media(max-width:650px){.manage{width:calc(100% - 28px)}.form-row{grid-template-columns:1fr}.custom-list article{align-items:flex-start;flex-direction:column}}
+
+/* V1 learning path, evidence-led review and stateful lab. */
+.learning-dashboard{grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.dashboard-card{min-width:0;padding:22px;border:1px solid var(--line);background:linear-gradient(145deg,rgba(15,30,26,.94),rgba(7,17,15,.96))}
+.dashboard-card>small{color:var(--cyan);font:700 8px var(--font-geist-mono);letter-spacing:.12em}
+.dashboard-card h2{margin:10px 0 8px;font-size:20px}
+.dashboard-card p{margin:0;color:#9db0a7;font-size:11px;line-height:1.6}
+.dashboard-card .primary,.dashboard-card .secondary{min-height:43px;margin-top:18px;padding:0 15px;font-size:11px}
+.dashboard-card code{color:var(--acid);font:600 11px var(--font-geist-mono)}
+.dashboard-status{display:block;margin-top:18px;color:var(--acid);font:650 9px/1.5 var(--font-geist-mono);text-transform:uppercase}
+.chapter-progress{margin-top:16px;color:var(--muted);font:650 8px var(--font-geist-mono);text-transform:uppercase}
+.chapter-progress i{display:block;height:4px;margin-top:8px;background:rgba(157,190,174,.12)}
+.chapter-progress b{display:block;height:100%;background:linear-gradient(90deg,var(--cyan),var(--acid))}
+.validation-card details{margin-top:16px;color:var(--muted);font-size:10px}
+.validation-card summary{cursor:pointer;color:var(--acid);font:650 9px var(--font-geist-mono);text-transform:uppercase}
+.validation-card ul{margin:10px 0 0;padding-left:18px;line-height:1.7}
+.validation-card a{color:var(--cyan)}
+
+.teaching-card{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:12px}
+.teaching-card>div{padding:10px;border:1px solid var(--line);background:rgba(4,10,9,.72)}
+.teaching-card>div>small{color:var(--cyan)}
+.teaching-card p{margin-top:5px;font-size:10px}
+.teaching-card code{width:auto;margin-top:5px;border:0;padding:0;background:transparent;color:var(--acid)}
+.learning-coach:has(.teaching-card){grid-template-columns:minmax(0,1fr) 210px;align-items:start}
+
+.field-lab .clock b{letter-spacing:-.03em}
+.scenario-ticket{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
+.scenario-ticket span{min-width:0;color:var(--muted);font:650 8px/1.4 var(--font-geist-mono)}
+.scenario-ticket b{display:block;margin-top:4px;overflow-wrap:anywhere;color:var(--text);font-size:10px}
+.scenario-terminal .log{height:clamp(180px,30dvh,310px)}
+.scenario-choices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:14px 20px 18px}
+.scenario-choices button{min-height:52px;padding:10px 13px;text-align:left;border:1px solid rgba(98,230,214,.24);background:rgba(98,230,214,.06);color:var(--text);font-size:11px;line-height:1.45}
+.scenario-choices button:hover{border-color:var(--cyan);background:rgba(98,230,214,.1)}
+.scenario-complete-action{padding:0 20px 18px;text-align:right}
+.scenario-complete-action .primary{margin:0}
+.scenario-lesson{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));margin-top:12px;border:1px solid var(--line);background:rgba(12,24,21,.9)}
+.scenario-lesson.accepted{border-color:rgba(98,230,214,.28)}
+.scenario-lesson.rejected{border-color:rgba(255,122,114,.3)}
+.scenario-lesson>div{min-width:0;padding:13px;border-right:1px solid var(--line)}
+.scenario-lesson>div:last-child{border:0}
+.scenario-lesson small{color:var(--cyan);font:700 8px var(--font-geist-mono);letter-spacing:.1em}
+.scenario-lesson p{margin:6px 0 0;color:#9db0a7;font-size:10px;line-height:1.45}
+.scenario-report .report-detail b{line-height:1.45}
+
+@media(max-width:900px){.learning-dashboard{grid-template-columns:minmax(0,1fr)}.scenario-ticket{grid-template-columns:repeat(2,minmax(0,1fr))}.scenario-lesson{grid-template-columns:repeat(2,minmax(0,1fr))}.scenario-lesson>div:nth-child(2){border-right:0}}
+@media(max-width:650px){.shell{width:100%;max-width:100vw;overflow-x:hidden}header,.home,.game,.report,footer,.manage{width:calc(100vw - 20px);max-width:calc(100vw - 20px);min-width:0}.home>*,.hero,.mode-picker,.learning-dashboard,.dashboard-card,.mode-card{width:100%;max-width:100%;min-width:0}.hero h1,.hero .lead,.dashboard-card h2,.dashboard-card p,.mode-card p{max-width:100%;overflow-wrap:anywhere}.controls{min-width:0;overflow:hidden}.controls button{min-width:0;overflow:hidden;text-overflow:ellipsis}.dashboard-card{padding:17px}.teaching-card{grid-template-columns:minmax(0,1fr)}.learning-coach:has(.teaching-card){grid-template-columns:minmax(0,1fr)}.scenario-choices{grid-template-columns:minmax(0,1fr);padding:10px}.scenario-lesson{grid-template-columns:minmax(0,1fr)}.scenario-lesson>div{border-right:0;border-bottom:1px solid var(--line)}.scenario-lesson>div:last-child{border-bottom:0}.scenario-terminal .log{height:clamp(160px,27dvh,230px)}}

@@ -25,7 +25,7 @@ export const gameModes: Readonly<Record<GameModeId, GameModeRules>> = {
   easy: {
     id: "easy",
     label: "Easy",
-    description: "Untimed recall practice with no clock pressure.",
+    description: "Untimed chapters with faded help and scheduled clean recall.",
     initialTimeMs: null,
     wrongPenaltiesMs: [0, 0, 0],
     correctBonusMs: 0,

@@ -1,4 +1,6 @@
 import { expandedCommands } from "./expanded-catalogue.ts";
+import { teachingExplanation } from "./command-teaching.ts";
+import { commandGrammarTokens } from "./cli-grammar.ts";
 
 export type CliMode = "user" | "privileged" | "global" | "interface" | "router" | "line" | "vlan" | "acl" | "dhcp";
 export type CommandKind = "navigation" | "verification" | "configuration";
@@ -74,7 +76,10 @@ const coreCommands: Command[] = [
   c("nav.end-router", "router", "end", "Return directly to Privileged EXEC mode.", "CLI navigation", "navigation"),
 ];
 
-export const commands: Command[] = [...coreCommands, ...expandedCommands];
+export const commands: Command[] = [...coreCommands, ...expandedCommands].map((command) => ({
+  ...command,
+  explanation: teachingExplanation(command),
+}));
 
 export const commandById = new Map(commands.map(command => [command.id, command]));
 export const modeNames: Record<CliMode, string> = {
@@ -131,6 +136,57 @@ export const validate = (raw:string, mode:CliMode, expectedId:string, catalogue:
     return {ok:false,input,code:"WRONG_OBJECTIVE",message:`That is a valid ${other.topic.toLowerCase()} command, but it does not complete this objective.`};
   }
   return syntaxError(input,expected)??{ok:false,input,code:"UNSUPPORTED",message:"This IOS XE learning pack does not support that command for the current objective."};
+};
+
+/**
+ * Field-CLI validation accepts only deterministic, unambiguous keyword
+ * abbreviations. Objective values remain exact: abbreviating a keyword must
+ * never turn a different address, interface or policy value into a success.
+ */
+export const validateOperational = (
+  raw: string,
+  mode: CliMode,
+  expectedId: string,
+  catalogue: Command[] = commands,
+): Validation => {
+  const exact = validate(raw, mode, expectedId, catalogue);
+  if (exact.ok) return exact;
+  const input = normalise(raw);
+  if (!input || input.length > 256) return exact;
+  const expected = catalogue.find((command) => command.id === expectedId);
+  if (!expected || expected.mode !== mode) return exact;
+  const typed = input.split(" ");
+  let matching = catalogue.filter((command) => {
+    if (command.mode !== mode) return false;
+    const grammar = commandGrammarTokens(command);
+    if (grammar.length !== typed.length) return false;
+    return grammar.every((token, index) => token.kind === "keyword"
+      ? token.source.toLocaleLowerCase("en-GB").startsWith(typed[index].toLocaleLowerCase("en-GB"))
+      : token.source.toLocaleLowerCase("en-GB") === typed[index].toLocaleLowerCase("en-GB"));
+  });
+  for (const [index, typedToken] of typed.entries()) {
+    const exactKeywordExists = matching.some((command) => {
+      const token = commandGrammarTokens(command)[index];
+      return token?.kind === "keyword"
+        && token.source.toLocaleLowerCase("en-GB") === typedToken.toLocaleLowerCase("en-GB");
+    });
+    if (exactKeywordExists) {
+      matching = matching.filter((command) => {
+        const token = commandGrammarTokens(command)[index];
+        return token?.kind === "keyword"
+          && token.source.toLocaleLowerCase("en-GB") === typedToken.toLocaleLowerCase("en-GB");
+      });
+    }
+  }
+  const matchingCanonicals = new Set(matching.map((command) =>
+    command.canonical.toLocaleLowerCase("en-GB")));
+  if (
+    matchingCanonicals.size === 1
+    && matchingCanonicals.has(expected.canonical.toLocaleLowerCase("en-GB"))
+  ) {
+    return { ok: true, input, command: expected };
+  }
+  return exact;
 };
 
 export interface DeviceState { hostname:string; mode:CliMode; selectedInterface:string; ipv4:string|null; mask:string|null; adminUp:boolean; description:string; routes:string[]; startup:string|null; }

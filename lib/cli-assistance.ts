@@ -1,3 +1,8 @@
+import {
+  commandGrammarTokens,
+  grammarTokenMatches,
+  type CliGrammarToken,
+} from "./cli-grammar.ts";
 import type { CliMode, Command } from "./engine.ts";
 
 export interface CliCompletion {
@@ -23,33 +28,60 @@ export interface CliHelp {
 
 export const maxVisibleCliOptions = 24;
 
+interface GrammarCandidate {
+  command: Command;
+  grammar: CliGrammarToken[];
+}
+
 const tokensOf = (value: string): string[] =>
   value.trim().split(/\s+/u).filter(Boolean);
 
 const lower = (value: string): string => value.toLocaleLowerCase("en-GB");
 
-const commandTokens = (command: Command): string[] => tokensOf(command.canonical);
-
 const inMode = (
   mode: CliMode,
   catalogue: readonly Command[],
-): Command[] => catalogue.filter((command) => command.mode === mode);
+): GrammarCandidate[] => catalogue
+  .filter((command) => command.mode === mode)
+  .map((command) => ({ command, grammar: commandGrammarTokens(command) }));
 
 const matchesTypedTokens = (
-  canonical: readonly string[],
+  grammar: readonly CliGrammarToken[],
   typed: readonly string[],
 ): boolean => typed.every((token, index) =>
-  canonical[index] !== undefined && lower(canonical[index]).startsWith(lower(token)));
+  grammar[index] !== undefined && grammarTokenMatches(grammar[index], token));
 
-const uniqueTokensAt = (
-  candidates: readonly Command[],
+const matchingCandidates = (
+  candidates: readonly GrammarCandidate[],
+  typed: readonly string[],
+): GrammarCandidate[] => {
+  let matches = candidates.filter((candidate) => matchesTypedTokens(candidate.grammar, typed));
+  for (const [index, typedToken] of typed.entries()) {
+    const hasExactKeyword = matches.some((candidate) => {
+      const grammarToken = candidate.grammar[index];
+      return grammarToken?.kind === "keyword"
+        && lower(grammarToken.source) === lower(typedToken);
+    });
+    if (hasExactKeyword) {
+      matches = matches.filter((candidate) => {
+        const grammarToken = candidate.grammar[index];
+        return grammarToken?.kind === "keyword"
+          && lower(grammarToken.source) === lower(typedToken);
+      });
+    }
+  }
+  return matches;
+};
+
+const uniqueKeywordTokensAt = (
+  candidates: readonly GrammarCandidate[],
   index: number,
 ): string[] => {
   const byLowercase = new Map<string, string>();
-  for (const command of candidates) {
-    const token = commandTokens(command)[index];
-    if (token !== undefined && !byLowercase.has(lower(token))) {
-      byLowercase.set(lower(token), token);
+  for (const candidate of candidates) {
+    const token = candidate.grammar[index];
+    if (token?.kind === "keyword" && !byLowercase.has(lower(token.source))) {
+      byLowercase.set(lower(token.source), token.source);
     }
   }
   return [...byLowercase.values()].sort((left, right) => left.localeCompare(right, "en-GB"));
@@ -67,9 +99,9 @@ const commonPrefix = (values: readonly string[]): string => {
 };
 
 /**
- * Completes only prefixes supported by commands in the current simulated CLI
- * mode. Blank tokens are never guessed, so Tab cannot disclose an entire
- * command without the player supplying at least one character per keyword.
+ * Completes only the token immediately before the caret at the end of input.
+ * Existing abbreviations and spacing are preserved byte-for-byte. Arguments
+ * and blank tokens are never guessed from task-specific catalogue values.
  */
 export const completeCliInput = (
   raw: string,
@@ -96,8 +128,7 @@ export const completeCliInput = (
     };
   }
 
-  const candidates = inMode(mode, catalogue)
-    .filter((command) => matchesTypedTokens(commandTokens(command), typed));
+  const candidates = matchingCandidates(inMode(mode, catalogue), typed);
   if (!candidates.length) {
     return {
       input: raw,
@@ -108,51 +139,71 @@ export const completeCliInput = (
     };
   }
 
-  let changed = false;
-  let lastTokenWasUnique = false;
-  const completed = typed.map((token, index) => {
-    const options = uniqueTokensAt(candidates, index);
-    const completion = options.length === 1 ? options[0] : commonPrefix(options);
-    const usefulCompletion = completion.length > token.length
-      && lower(completion).startsWith(lower(token));
-    const exactUniqueToken = options.length === 1 && lower(options[0]) === lower(token);
-    if (index === typed.length - 1) lastTokenWasUnique = options.length === 1;
-    if (usefulCompletion || exactUniqueToken && options[0] !== token) {
-      changed = true;
-      return options.length === 1 ? options[0] : completion;
-    }
-    return token;
-  });
+  const currentIndex = typed.length - 1;
+  const currentToken = typed[currentIndex];
+  const options = uniqueKeywordTokensAt(candidates, currentIndex);
+  const argumentCanMatch = candidates.some((candidate) =>
+    candidate.grammar[currentIndex]?.kind === "argument");
+  if (!options.length) {
+    return {
+      input: raw,
+      changed: false,
+      assisted: false,
+      matchingCommands: candidates.length,
+      message: "Tab does not complete variable values; press ? to view the expected syntax.",
+    };
+  }
+  if (argumentCanMatch) {
+    return {
+      input: raw,
+      changed: false,
+      assisted: false,
+      matchingCommands: candidates.length,
+      message: "That text can be a keyword or a variable value; type another character or press ? for options.",
+    };
+  }
 
-  const candidateContinues = candidates.some((command) =>
-    commandTokens(command).length > typed.length);
-  const completionIsCommand = candidates.some((command) =>
-    lower(command.canonical) === lower(completed.join(" ")));
-  const addSpace = lastTokenWasUnique && candidateContinues && !completionIsCommand;
-  const input = `${completed.join(" ")}${addSpace ? " " : ""}`;
-  changed ||= input !== raw;
+  const completion = options.length === 1 ? options[0] : commonPrefix(options);
+  const usefulCompletion = completion.length > currentToken.length
+    && lower(completion).startsWith(lower(currentToken));
+  const normalisesCase = options.length === 1
+    && lower(options[0]) === lower(currentToken)
+    && options[0] !== currentToken;
+  const candidateContinues = candidates.some((candidate) =>
+    candidate.grammar.length > typed.length);
+  const completionCanEnd = candidates.some((candidate) =>
+    candidate.grammar.length === typed.length);
+  const addSpace = options.length === 1 && candidateContinues && !completionCanEnd;
+
+  if (!usefulCompletion && !normalisesCase && !addSpace) {
+    return {
+      input: raw,
+      changed: false,
+      assisted: false,
+      matchingCommands: candidates.length,
+      message: options.length > 1
+        ? "That keyword is still ambiguous; type another character or press ? for options."
+        : "No further keyword completion is available.",
+    };
+  }
+
+  const replacement = options.length === 1 ? options[0] : completion;
+  const tokenStart = raw.length - currentToken.length;
+  const input = `${raw.slice(0, tokenStart)}${replacement}${addSpace ? " " : ""}`;
 
   return {
-    input: changed ? input : raw,
-    changed,
-    assisted: changed,
+    input,
+    changed: input !== raw,
+    assisted: input !== raw,
     matchingCommands: candidates.length,
-    message: changed
-      ? "Unique command text completed."
-      : "That prefix is still ambiguous; type another character or press ? for options.",
+    message: "Current keyword completed; earlier text was left unchanged.",
   };
 };
 
-const descriptionFor = (commands: readonly Command[]): string => {
-  if (commands.length === 1) return commands[0].objective;
-  const topics = [...new Set(commands.map((command) => command.topic))]
-    .sort((left, right) => left.localeCompare(right, "en-GB"));
-  const topicSummary = topics.slice(0, 2).join(" · ");
-  const remainder = topics.length > 2 ? ` +${topics.length - 2} topics` : "";
-  return `${topicSummary}${remainder} · ${commands.length} matching commands`;
-};
+const optionDescription = (descriptions: ReadonlySet<string>): string =>
+  [...descriptions].sort((left, right) => left.localeCompare(right, "en-GB")).join(" / ");
 
-/** Returns the deterministic next-token menu for IOS-style inline `?` help. */
+/** Returns a deterministic, parser-like next-token menu for IOS inline `?` help. */
 export const cliHelp = (
   raw: string,
   mode: CliMode,
@@ -165,19 +216,25 @@ export const cliHelp = (
     : hasTrailingSpace ? typed.length : typed.length - 1;
   const completedTokens = hasTrailingSpace ? typed : typed.slice(0, -1);
   const partial = typed.length === 0 || hasTrailingSpace ? "" : typed.at(-1) ?? "";
-  const candidates = inMode(mode, catalogue).filter((command) => {
-    const canonical = commandTokens(command);
-    return matchesTypedTokens(canonical, completedTokens)
-      && canonical[optionIndex] !== undefined
-      && lower(canonical[optionIndex]).startsWith(lower(partial));
+
+  const pathCandidates = matchingCandidates(inMode(mode, catalogue), completedTokens);
+  const optionCandidates = pathCandidates.filter((candidate) => {
+    const token = candidate.grammar[optionIndex];
+    return token !== undefined && (!partial || grammarTokenMatches(token, partial));
   });
 
-  const groups = new Map<string, { value: string; commands: Command[] }>();
-  for (const command of candidates) {
-    const value = commandTokens(command)[optionIndex];
-    const key = lower(value);
-    const group = groups.get(key) ?? { value, commands: [] };
-    group.commands.push(command);
+  const groups = new Map<string, {
+    value: string;
+    descriptions: Set<string>;
+  }>();
+  for (const candidate of optionCandidates) {
+    const token = candidate.grammar[optionIndex];
+    const key = lower(token.display);
+    const group = groups.get(key) ?? {
+      value: token.display,
+      descriptions: new Set<string>(),
+    };
+    group.descriptions.add(token.description);
     groups.set(key, group);
   }
 
@@ -185,24 +242,29 @@ export const cliHelp = (
     .sort((left, right) => left.value.localeCompare(right.value, "en-GB"))
     .map((group) => ({
       value: group.value,
-      description: descriptionFor(group.commands),
+      description: optionDescription(group.descriptions),
     }));
 
-  const normalised = typed.join(" ");
-  const acceptsReturn = hasTrailingSpace && inMode(mode, catalogue).some((command) =>
-    lower(command.canonical) === lower(normalised));
-  if (acceptsReturn) {
-    options.unshift({ value: "<cr>", description: "Submit this complete command" });
+  const returnCandidates = hasTrailingSpace
+    ? matchingCandidates(inMode(mode, catalogue), typed).filter((candidate) =>
+      candidate.grammar.length === typed.length)
+    : [];
+  if (returnCandidates.length > 0) {
+    options.unshift({ value: "<cr>", description: "Submit this syntactically complete command" });
   }
 
   const visible = options.slice(0, maxVisibleCliOptions);
   const hiddenOptions = Math.max(0, options.length - visible.length);
   const assisted = visible.length > 0;
+  const matchingCommands = new Set([
+    ...optionCandidates.map((candidate) => candidate.command.id),
+    ...returnCandidates.map((candidate) => candidate.command.id),
+  ]).size;
 
   return {
     options: visible,
     assisted,
-    matchingCommands: candidates.length,
+    matchingCommands,
     hiddenOptions,
     message: assisted
       ? `${options.length} context option${options.length === 1 ? "" : "s"} available.`

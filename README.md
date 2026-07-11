@@ -10,16 +10,19 @@ This is an independent educational simulator. It is not affiliated with or endor
 
 - Four game modes: Easy, Normal, Hard and Hardcore.
 - Responsive layouts for full-screen, windowed, tablet, portrait-mobile and short landscape play.
-- Untimed Easy practice with staged strategies, command shapes and voluntary reveals.
-- Easy attempts earn learning points but never advance mastery; a full reveal earns zero points.
-- IOS-style `Tab` completion expands only unique prefixes in the current CLI mode.
-- Inline `?` help lists deterministic next-token options without submitting the command or directly changing score or time.
-- A correct CLI-assisted answer keeps its normal score and time reward but cannot advance mastery.
+- A prerequisite-gated beginner path in chapters of at most six commands, progressing from CLI navigation through verification, interfaces and IPv4, VLANs, routing, access control, DHCP and NAT.
+- Untimed Easy practice with a faded ladder: retrieval strategy, semantic structure, command family and voluntary full reveal.
+- Clean, first-attempt Easy recall enters the spaced-review schedule; assisted or revealed answers do not advance memory mastery, and a full reveal earns zero points.
+- A bounded Daily Recall session containing only commands whose review time is due.
+- IOS-style `Tab` completes only the keyword at the caret, preserving earlier abbreviations and never guessing a variable value or blank token.
+- Inline `?` help displays deterministic grammar such as `A.B.C.D`, `INTERFACE`, ranges and `<cr>` without exposing the task's literal answer.
+- A correct CLI-assisted answer keeps its normal operational score and time reward but cannot extend a clean streak, clean personal best or mastery interval.
+- Clean Recall and Field CLI personal records are stored separately; deterministic unique IOS keyword abbreviations are accepted as Field CLI success while task values remain exact.
 - Physical `Tab` and `?` keep focus and the caret at the end of the simulated command line; equivalent touch controls remain available.
 - PuTTY-style clipboard flow: selecting terminal output copies it, Ctrl+V pastes, and right-click pastes directly when browser clipboard permission is available.
-- Every run uses a weighted random queue that cannot repeat the previous opening command string.
+- Adaptive sessions are bounded and cannot repeat the previous opening command string.
 - IPv4 receives the strongest protocol weighting; IPv6 remains in lower-frequency rotation.
-- Correct, assisted and fully revealed commands receive progressively higher revisit weight.
+- Due, overdue, failed, assisted, revealed and slow commands drive the queue; retained commands remain a smaller confidence sample, and repeated correctness no longer increases urgency.
 - Normal starts with sixty seconds, adds three seconds for a correct command or five seconds from a three-answer clean streak, and removes one, three then five seconds across consecutive errors.
 - Hard starts with sixty seconds, always adds three seconds for a correct command, and removes five, ten then fifteen seconds across consecutive errors.
 - Hardcore starts with sixty seconds, adds two seconds for a correct command and ends immediately after one incorrect submission.
@@ -27,13 +30,15 @@ This is an independent educational simulator. It is not affiliated with or endor
 - User EXEC, Privileged EXEC, Global, Interface, Router, Line, VLAN, named ACL and DHCP-pool modes.
 - Deterministic local validation. Player input is never executed.
 - Specific error feedback during the round.
-- Explanation and practical use-case feedback after both correct and incorrect submissions; timed mistakes do not leak hidden canonical text.
+- Structured post-answer teaching covers purpose, use, syntax, expected state or output, verification, common traps, rollback and operational risk; timed mistakes do not leak hidden canonical text.
 - Wrong answers move on without revealing the correct command.
 - A later retry earns reduced score and does not advance mastery.
 - An objective left unanswered when time expires is added to the missed review.
 - Correct commands and explanations for missed items appear only after the timer reaches zero.
 - Combination scoring and capped speed bonuses.
-- Local progress and spaced-review scheduling.
+- Local progress, due-led spaced review and a visible beginner curriculum.
+- A complete stateful IPv4 field lab: manual prompt navigation, interface configuration, output interpretation, seeded route diagnosis, repair, reachability verification, save and verified rollback.
+- Named Cisco CML image targets and an integrity-checked offline evidence workflow. The UI continues to show zero image-verified objectives until real licensed-image evidence exists.
 - Custom question, answer and explanation management.
 - Docker persistence for custom commands under `/data`.
 - One configured login account with no registration route.
@@ -44,11 +49,17 @@ This is an independent educational simulator. It is not affiliated with or endor
 app/page.tsx                 Responsive game, report and custom-command UI
 lib/engine.ts                Parser, CLI modes and simulator
 lib/expanded-catalogue.ts    Curated built-in command pack
+lib/cli-grammar.ts           Deterministic keyword and argument grammar
 lib/cli-assistance.ts        Deterministic Tab completion and question-mark menus
-lib/command-queue.ts         Weighted adaptive random command ordering
+lib/command-queue.ts         Due/weak/new/retained adaptive sessions and Daily Recall
+lib/curriculum.ts            Prerequisite-gated beginner chapters
 lib/game-modes.ts            Deterministic game-mode time rules
 lib/learning.ts              Deterministic Easy-mode learning aids
 lib/scheduler.ts             Review scheduling and score calculation
+lib/command-teaching.ts      Structured instructional metadata
+lib/ipv4-scenario.ts         Stateful configuration and troubleshooting lab
+lib/platform-validation.ts   Named target assignments and trust status
+docs/catalogue-validation.md Offline named-image evidence process
 server/auth-server.mjs       Docker authentication and persistence gateway
 scripts/init-secrets.mjs     Interactive password and session-secret setup
 tests/engine/                Command, scheduler and reveal-policy tests
@@ -174,7 +185,7 @@ Custom entries are data only. They cannot contain JavaScript, regular expression
 ## Known limitations
 
 - The expanded pack prioritises CCNA-level recall. It is not a complete command reference.
-- Most expanded commands are deterministic recall items rather than full stateful emulation.
-- Platform differences still need formal lab-image review and content metadata.
+- Most expanded commands remain deterministic recall items; the IPv4 field lab is the first vertically complete stateful scenario.
+- All objectives have named CML target assignments, but no objective is labelled image-verified because no authorised CML image or captured lab evidence was available in this workspace. See `docs/catalogue-validation.md`.
 - Local learning progress is not yet synchronised through the Docker volume.
 - Login rate limits reset when the container restarts; Nginx provides a second rate-limit layer.

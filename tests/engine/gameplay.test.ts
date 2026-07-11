@@ -2,41 +2,50 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   acceptedAttemptPolicy,
+  classifyRoundRecord,
   failureFeedback,
   mayRevealAnswers,
   shouldRecordTimedOutObjective,
 } from "../../lib/gameplay.ts";
 
-test("accepted attempts distinguish first recall from retry credit", () => {
-  assert.deepEqual(acceptedAttemptPolicy(1, 4), {
-    attempt: 1,
-    outcome: "firstTry",
-    firstTry: true,
-    masteryEligible: true,
-    combo: 5,
-  });
-  assert.deepEqual(acceptedAttemptPolicy(2, 4), {
-    attempt: 2,
-    outcome: "retry",
-    firstTry: false,
-    masteryEligible: false,
-    combo: 0,
-  });
-  assert.deepEqual(acceptedAttemptPolicy(3, 4), {
-    attempt: 3,
-    outcome: "retry",
-    firstTry: false,
-    masteryEligible: false,
-    combo: 0,
-  });
+test("a clean first recall can advance mastery, records and combination", () => {
+  const policy = acceptedAttemptPolicy(1, 4);
+  assert.equal(policy.classification, "clean-recall");
+  assert.equal(policy.cleanRecall, true);
+  assert.equal(policy.masteryEligible, true);
+  assert.equal(policy.cleanRecordEligible, true);
+  assert.equal(policy.roundRecordEligible, true);
+  assert.equal(policy.reviewOutcome, "firstTry");
+  assert.equal(policy.combo, 5);
+});
 
-  assert.deepEqual(acceptedAttemptPolicy(1, 4, true), {
-    attempt: 1,
-    outcome: "firstTry",
-    firstTry: true,
-    masteryEligible: false,
-    combo: 5,
-  });
+test("a recovered answer earns operational credit without clean mastery", () => {
+  const policy = acceptedAttemptPolicy(2, 4);
+  assert.equal(policy.classification, "recovered-recall");
+  assert.equal(policy.operationalRewardEligible, true);
+  assert.equal(policy.masteryEligible, false);
+  assert.equal(policy.cleanRecordEligible, false);
+  assert.equal(policy.roundRecordEligible, true);
+  assert.equal(policy.reviewOutcome, "retry");
+  assert.equal(policy.combo, 0);
+});
+
+test("CLI assistance preserves operational reward but not clean credit", () => {
+  const policy = acceptedAttemptPolicy(1, 4, true);
+  assert.equal(policy.classification, "cli-assisted");
+  assert.equal(policy.operationalSuccess, true);
+  assert.equal(policy.operationalRewardEligible, true);
+  assert.equal(policy.masteryEligible, false);
+  assert.equal(policy.cleanRecordEligible, false);
+  assert.equal(policy.roundRecordEligible, false);
+  assert.equal(policy.reviewOutcome, null);
+  assert.equal(policy.combo, 0);
+});
+
+test("a run with assistance is classified separately from clean personal bests", () => {
+  assert.equal(classifyRoundRecord(0, 0), null);
+  assert.equal(classifyRoundRecord(5, 0), "clean");
+  assert.equal(classifyRoundRecord(5, 1), "field");
 });
 
 test("failure feedback explains the error without adding a canonical answer", () => {

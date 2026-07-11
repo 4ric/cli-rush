@@ -1,7 +1,159 @@
-export const intervals=[600000,86400000,259200000,604800000,1209600000,2592000000] as const;
-export type Outcome="firstTry"|"retry"|"revealed"|"failed";
-export interface Review{stage:number;dueAt:number;lastAt:number;lapses:number;bestStage:number;outcome:Outcome}
-export const schedule=(previous:Review|undefined,outcome:Outcome,now:number):Review=>{const success=outcome==="firstTry";const stage=success?Math.min(previous?previous.stage+1:0,intervals.length-1):Math.max(0,(previous?.stage??0)-2);return{stage,dueAt:now+intervals[stage],lastAt:now,lapses:(previous?.lapses??0)+(success?0:1),bestStage:Math.max(previous?.bestStage??0,stage),outcome};};
-export const due=(reviews:Record<string,Review>,now:number)=>Object.entries(reviews).filter(([,r])=>r.dueAt<=now).map(([id,review])=>({id,review})).sort((a,b)=>a.review.dueAt-b.review.dueAt||b.review.lapses-a.review.lapses||a.id.localeCompare(b.id));
-export const nextDue=(reviews:Record<string,Review>)=>{const values=Object.values(reviews).map(r=>r.dueAt);return values.length?Math.min(...values):null;};
-export const score=(difficulty:number,attempt:number,responseMs:number,combo:number,revealed:boolean)=>{if(revealed)return 0;const attemptM=attempt===1?1:attempt===2?0.65:0.3;const speed=attempt===1?1+Math.max(0,Math.min(.15,(8000-responseMs)/8000*.15)):1;const comboM=combo>=8?1.3:combo>=5?1.2:combo>=3?1.1:1;return Math.round(100*(difficulty===3?1.5:difficulty===2?1.25:1)*attemptM*speed*comboM);};
+export const intervals = [
+  600_000,
+  86_400_000,
+  259_200_000,
+  604_800_000,
+  1_209_600_000,
+  2_592_000_000,
+] as const;
+
+export type Outcome = "firstTry" | "retry" | "revealed" | "failed";
+
+export interface Review {
+  stage: number;
+  dueAt: number;
+  lastAt: number;
+  lapses: number;
+  bestStage: number;
+  outcome: Outcome;
+  /** Clean, first-attempt recalls only. Older persisted reviews may omit it. */
+  cleanRecalls?: number;
+  /** Optional fluency evidence used by the adaptive queue. */
+  lastResponseMs?: number;
+}
+
+export type ReviewEvidence =
+  | { kind: "clean"; responseMs?: number }
+  | { kind: "retry"; responseMs?: number }
+  | { kind: "revealed" }
+  | { kind: "failed" }
+  | { kind: "assisted"; responseMs?: number };
+
+const cappedStage = (stage: number): number =>
+  Math.max(0, Math.min(stage, intervals.length - 1));
+
+const previousCleanRecalls = (previous: Review | undefined): number => {
+  if (!previous) return 0;
+  if (previous.cleanRecalls !== undefined) return previous.cleanRecalls;
+  // Preserve evidence from reviews persisted before this counter existed.
+  return previous.outcome === "firstTry" || previous.bestStage > 0 ? 1 : 0;
+};
+
+const reviewAtStage = (
+  previous: Review | undefined,
+  stage: number,
+  outcome: Outcome,
+  now: number,
+  cleanRecalls: number,
+  responseMs?: number,
+): Review => ({
+  stage,
+  dueAt: now + intervals[stage],
+  lastAt: now,
+  lapses: (previous?.lapses ?? 0) + (outcome === "firstTry" ? 0 : 1),
+  bestStage: Math.max(previous?.bestStage ?? 0, stage),
+  outcome,
+  cleanRecalls,
+  ...(responseMs === undefined ? {} : { lastResponseMs: responseMs }),
+});
+
+/**
+ * Applies one piece of learning evidence to a review.
+ *
+ * Assistance is useful operational practice, but it is not retrieval evidence,
+ * so it never creates or lengthens a review interval. A clean recall before its
+ * due time records practice without moving the due date. This prevents repeated
+ * same-session answers from racing through the spacing stages.
+ */
+export const updateReview = (
+  previous: Review | undefined,
+  evidence: ReviewEvidence,
+  now: number,
+): Review | undefined => {
+  if (evidence.kind === "assisted") return previous;
+
+  if (evidence.kind === "clean") {
+    const cleanRecalls = previousCleanRecalls(previous) + 1;
+    if (!previous) {
+      return reviewAtStage(undefined, 0, "firstTry", now, cleanRecalls, evidence.responseMs);
+    }
+
+    if (now < previous.dueAt) {
+      return {
+        ...previous,
+        lastAt: now,
+        outcome: "firstTry",
+        cleanRecalls,
+        ...(evidence.responseMs === undefined ? {} : { lastResponseMs: evidence.responseMs }),
+      };
+    }
+
+    const nextStage = cappedStage(previous.stage + 1);
+    return reviewAtStage(previous, nextStage, "firstTry", now, cleanRecalls, evidence.responseMs);
+  }
+
+  const outcome: Exclude<Outcome, "firstTry"> = evidence.kind;
+  const nextStage = cappedStage((previous?.stage ?? 0) - 2);
+  return reviewAtStage(
+    previous,
+    nextStage,
+    outcome,
+    now,
+    previousCleanRecalls(previous),
+    "responseMs" in evidence ? evidence.responseMs : undefined,
+  );
+};
+
+/**
+ * Backwards-compatible scheduler entry point. `firstTry` means a clean,
+ * unassisted recall. Use `updateReview` when assistance must be represented.
+ */
+export const schedule = (
+  previous: Review | undefined,
+  outcome: Outcome,
+  now: number,
+  responseMs?: number,
+): Review => {
+  const evidence: ReviewEvidence = outcome === "firstTry"
+    ? { kind: "clean", responseMs }
+    : outcome === "retry"
+      ? { kind: "retry", responseMs }
+      : { kind: outcome };
+  return updateReview(previous, evidence, now)!;
+};
+
+export const due = (
+  reviews: Readonly<Record<string, Review>>,
+  now: number,
+): Array<{ id: string; review: Review }> =>
+  Object.entries(reviews)
+    .filter(([, review]) => review.dueAt <= now)
+    .map(([id, review]) => ({ id, review }))
+    .sort((left, right) =>
+      left.review.dueAt - right.review.dueAt
+      || right.review.lapses - left.review.lapses
+      || left.id.localeCompare(right.id));
+
+export const nextDue = (reviews: Readonly<Record<string, Review>>): number | null => {
+  const values = Object.values(reviews).map((review) => review.dueAt);
+  return values.length ? Math.min(...values) : null;
+};
+
+export const score = (
+  difficulty: number,
+  attempt: number,
+  responseMs: number,
+  combo: number,
+  revealed: boolean,
+): number => {
+  if (revealed) return 0;
+  const attemptMultiplier = attempt === 1 ? 1 : attempt === 2 ? 0.65 : 0.3;
+  const speedMultiplier = attempt === 1
+    ? 1 + Math.max(0, Math.min(0.15, ((8_000 - responseMs) / 8_000) * 0.15))
+    : 1;
+  const comboMultiplier = combo >= 8 ? 1.3 : combo >= 5 ? 1.2 : combo >= 3 ? 1.1 : 1;
+  const difficultyMultiplier = difficulty === 3 ? 1.5 : difficulty === 2 ? 1.25 : 1;
+  return Math.round(
+    100 * difficultyMultiplier * attemptMultiplier * speedMultiplier * comboMultiplier,
+  );
+};

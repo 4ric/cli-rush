@@ -12,10 +12,11 @@
     "start": "vinext start",
     "start:docker": "node server/auth-server.mjs",
     "init:secrets": "node scripts/init-secrets.mjs",
-    "test": "npm run test:unit && npm run build && npm run test:auth && node --test tests/rendered-html.test.mjs",
+    "test": "npm run test:unit && npm run validate:lab-evidence && npm run build && npm run test:auth && node --test tests/rendered-html.test.mjs",
     "test:unit": "node --test tests/engine/*.test.ts",
     "test:auth": "node --test tests/server/auth-server.test.mjs",
     "validate:artifact": "bash scripts/validate-artifact.sh",
+    "validate:lab-evidence": "node scripts/validate-lab-evidence.mjs validation/lab-evidence.json",
     "lint": "bash scripts/sites-env.sh -- eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "bash scripts/sites-env.sh -- drizzle-kit generate"
   },

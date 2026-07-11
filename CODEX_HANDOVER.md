@@ -22,17 +22,18 @@ The built-in catalogue currently contains:
 
 Implemented player flow:
 
-1. Choose Easy, Normal, Hard or Hardcore rules before starting.
-2. Learn commands without time pressure in Easy, using staged deterministic help when needed.
+1. Follow a prerequisite-gated beginner path, run due-only Daily Recall, launch the stateful IPv4 field lab, or choose Easy, Normal, Hard or Hardcore rules.
+2. Learn commands without time pressure using retrieval strategy, semantic structure, command-family and reveal stages.
 3. Move into sixty-second time-bank modes: correct commands add time, Normal and Hard errors remove time, and one Hardcore error ends the run.
 4. Read an operational objective and Cisco-style prompt.
 5. Type a full canonical command from memory.
-6. Use physical or on-screen IOS-style `Tab` prefix completion or `?` next-token help when spelling or syntax is uncertain.
+6. Use physical or on-screen IOS-style `Tab` completion for the current token or grammar-based `?` help when spelling or syntax is uncertain.
 7. Receive deterministic, specific feedback, a practical use case and visible time changes after either a correct or incorrect submission.
-8. Build a score and reward streak; assisted answers retain the game reward but do not advance mastery.
+8. Build an operational score and clean-recall streak; assisted answers retain their operational reward but use a separate Field CLI record and do not advance mastery.
 9. Recover a failed item later for reduced retry credit without advancing mastery.
 10. At a completed timer, review incorrect, recovered and unanswered commands.
-11. Save browser progress and schedule future reviews.
+11. Save browser progress, schedule future reviews and return through the bounded Daily Recall queue when they become due.
+12. Apply IPv4 knowledge in a manual multi-step lab that requires configuration, output interpretation, diagnosis, verification, persistence and rollback.
 
 Also implemented:
 
@@ -52,12 +53,18 @@ Also implemented:
 | `app/globals.css` / `app/extra.css` | Responsive visual system |
 | `lib/engine.ts` | Parser, modes, validation and simulated device state |
 | `lib/expanded-catalogue.ts` | Expanded CCNA-oriented learning content |
+| `lib/cli-grammar.ts` | Mode-specific deterministic keyword and argument grammar |
 | `lib/cli-assistance.ts` | Deterministic IOS-style Tab completion and `?` option lookup |
-| `lib/command-queue.ts` | Weighted random queue, IPv4 focus and adaptive revisit weights |
+| `lib/command-queue.ts` | Due/weak/new/retained adaptive sessions and Daily Recall |
+| `lib/curriculum.ts` | Prerequisite-gated beginner chapters |
 | `lib/gameplay.ts` | Answer-reveal and failure-feedback policy |
 | `lib/game-modes.ts` | Easy, Normal, Hard and Hardcore timing rules |
-| `lib/learning.ts` | Easy-mode strategies, masked shapes, reveals and mnemonics |
+| `lib/learning.ts` | Faded semantic aids, reveals and post-answer mnemonics |
 | `lib/scheduler.ts` | Spaced review intervals and scoring |
+| `lib/command-teaching.ts` | Purpose, syntax, verification, trap, rollback and risk teaching data |
+| `lib/ipv4-scenario.ts` | Stateful IPv4 configuration and troubleshooting lab |
+| `lib/platform-validation.ts` | Named CML target assignments and validation status |
+| `docs/catalogue-validation.md` | Offline image-evidence procedure and current trust boundary |
 | `server/auth-server.mjs` | Docker HTTP gateway, login and custom-content persistence |
 | `scripts/init-secrets.mjs` | Interactive password-hash and session-secret generation |
 | `tests/engine/` | Command, gameplay-policy and scheduling tests |
@@ -76,9 +83,9 @@ The application validates against curated command data and mode rules. Do not re
 
 During a timed round, an incorrect answer does not expose the correct command. The player moves on. Full answers for missed items appear only when the time bank reaches zero. Ending early or failing a Hardcore run does not reveal them.
 
-`Tab` and `?` are deterministic catalogue lookups, not alternative validators. Using either is neutral at the moment it is requested. A subsequently correct answer keeps its normal game score and time reward, but the assisted recall does not advance mastery or a review interval.
+`Tab` and `?` are deterministic grammar operations, not generative hints. Tab touches only the current token and never guesses a blank or value. Using either is neutral at the moment it is requested. A subsequently correct answer keeps its operational score and time reward, but belongs to the Field CLI record and does not advance clean mastery, streaks or review intervals.
 
-Every new run builds a random weighted queue. It excludes the previous opening canonical command, prioritises IPv4 over IPv6, and increases revisit weight for commands with more correct recalls, assistance or full reveals. Incorrect timed feedback uses concept-only explanation text so this adaptation never weakens the answer-reveal policy.
+Every new session is bounded. It excludes the previous opening canonical command and draws roughly sixty per cent due/weak material, twenty per cent new material and twenty per cent retained confidence work when those pools exist. Due status, errors, assistance, reveals and slow recall increase priority; repeated correctness does not. Incorrect timed feedback uses concept-only explanation text so this adaptation never weakens the answer-reveal policy.
 
 The simulated terminal follows the common PuTTY clipboard model: selecting output attempts to copy it, Ctrl+V pastes sanitised text into the input, and right-click attempts direct paste through the browser Clipboard API. Clipboard content remains plain untrusted text and is never executed.
 
@@ -92,30 +99,16 @@ The catalogue is a simulator-tested draft. It is broad and CCNA-oriented, but ha
 
 ## Known limitations
 
-1. Most expanded catalogue entries validate recall but do not yet modify a detailed simulated device state.
-2. The due-review scheduler exists, but there is no dedicated Daily Recall gameplay screen.
-3. Learning progress does not synchronise across browsers or through the Docker data volume.
-4. Login rate-limit counters reset with the container; the supplied Nginx configuration adds a second layer.
-5. Platform and version metadata is not attached to every command.
-6. The deployment path currently uses `/data/contrainers/cli-rush`. Confirm whether `contrainers` is intentional before deploying.
-7. Abbreviation handling remains intentionally conservative. Do not accept shortened commands without a tested mode-specific ambiguity model.
+1. Most expanded catalogue entries validate recall rather than modifying detailed state; the IPv4 field lab is the first complete stateful scenario.
+2. Learning progress does not synchronise across browsers or through the Docker data volume.
+3. Login rate-limit counters reset with the container; the supplied Nginx configuration adds a second layer.
+4. Every command has a named CML target assignment, but zero commands are labelled image-verified until real licensed-image evidence is captured and reviewed.
+5. The deployment path currently uses `/data/contrainers/cli-rush`. Confirm whether `contrainers` is intentional before deploying.
+6. Field CLI abbreviations are accepted only through the deterministic mode grammar; exact task values remain mandatory.
 
 ## Recommended next vertical slice
 
-The strongest next slice is a real **Daily Recall** mode using the existing scheduler.
-
-Minimum acceptance criteria:
-
-1. Show only due items, ordered deterministically by due time and lapse count.
-2. Support a short untimed review session.
-3. Preserve the same CLI-mode validation and error feedback as Command Rush.
-4. Do not award mastery or advance the interval after an error or revealed answer.
-5. Save each completed review immediately.
-6. Show a report calculated only from that review session.
-7. Provide no Daily Recall button when no review is due; show plain status text instead.
-8. Add scheduler, persistence and UI-flow tests.
-
-Do not begin this slice unless it matches the user's requested next priority.
+Use the implemented evidence workflow in `docs/catalogue-validation.md` with an authorised CML lab. Validate the highest-use beginner and IPv4 scenario commands first, preserve target-specific evidence, and do not promote the whole pack from simulator-tested draft based on a partial sample.
 
 ## First actions for the receiving Codex agent
 
