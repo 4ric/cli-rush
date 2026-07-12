@@ -88,6 +88,7 @@ import {
   type Ipv4ScenarioChoiceId,
   type Ipv4ScenarioState,
 } from "@/lib/ipv4-scenario.ts";
+import { navigateCommandHistory } from "@/lib/command-history.ts";
 
 type Screen = "home" | "round" | "report" | "manage" | "scenario" | "scenario-report";
 type FinishReason = "timer" | "early" | "hardcore" | "practice" | "partial" | "complete";
@@ -338,6 +339,9 @@ export default function GameClient() {
   const [scenarioInput, setScenarioInput] = useState("");
   const [scenarioLines, setScenarioLines] = useState<string[]>([]);
   const [scenarioLesson, setScenarioLesson] = useState<Ipv4ScenarioActionResult | null>(null);
+  const [scenarioHistory, setScenarioHistory] = useState<string[]>([]);
+  const [scenarioHistoryAt, setScenarioHistoryAt] = useState(-1);
+  const [scenarioHistoryDraft, setScenarioHistoryDraft] = useState("");
 
   const progressRef = useRef(progress);
   const roundRef = useRef(round);
@@ -364,6 +368,7 @@ export default function GameClient() {
   const [input, setInput] = useState("");
   const [history, setHistory] = useState<string[]>([]);
   const [historyAt, setHistoryAt] = useState(-1);
+  const [historyDraft, setHistoryDraft] = useState("");
   const [lines, setLines] = useState<string[]>([]);
   const [startedAt, setStartedAt] = useState(0);
   const [advancing, setAdvancing] = useState(false);
@@ -493,8 +498,6 @@ export default function GameClient() {
     setCliAssistanceUsed(false);
     setEasyComplete(false);
     setDevice((current) => prepare(current, item));
-    setHistory([]);
-    setHistoryAt(-1);
     setStartedAt(performance.now());
     pausedAt.current = null;
     setAdvancing(false);
@@ -946,6 +949,9 @@ export default function GameClient() {
     pausedAt.current = null;
     setPaused(false);
     setInput("");
+    setHistory([]);
+    setHistoryAt(-1);
+    setHistoryDraft("");
     setLines([
       kind === "daily"
         ? `CLI RUSH // DAILY RECALL // ${nextQueue.length} DUE`
@@ -1058,6 +1064,9 @@ export default function GameClient() {
     const next = createIpv4Scenario(seedValue[0] || 1);
     setScenario(next);
     setScenarioInput("");
+    setScenarioHistory([]);
+    setScenarioHistoryAt(-1);
+    setScenarioHistoryDraft("");
     setScenarioLesson(null);
     setScenarioLines([
       "CLI RUSH // IPV4 FIELD LAB",
@@ -1087,6 +1096,9 @@ export default function GameClient() {
     if (!scenarioInput.trim() || scenarioChoices.length > 0 || scenario.phase === "complete") return;
     const entered = scenarioInput;
     const result = runIpv4ScenarioCommand(scenario, entered);
+    setScenarioHistory((values) => [...values, entered.trim()].slice(-20));
+    setScenarioHistoryAt(-1);
+    setScenarioHistoryDraft("");
     recordScenarioResult(result, `${ipv4ScenarioPrompt(scenario)} ${entered.trim()}`);
   };
 
@@ -1135,7 +1147,23 @@ export default function GameClient() {
       showScenarioCliOptions(withoutQuestionMark);
       return;
     }
+    setScenarioHistoryAt(-1);
+    setScenarioHistoryDraft(value);
     setScenarioInput(value);
+  };
+
+  const recallScenarioHistory = (direction: "older" | "newer") => {
+    const recalled = navigateCommandHistory(
+      scenarioHistory,
+      scenarioInput,
+      scenarioHistoryAt,
+      scenarioHistoryDraft,
+      direction,
+    );
+    setScenarioInput(recalled.value);
+    setScenarioHistoryAt(recalled.index);
+    setScenarioHistoryDraft(recalled.draft);
+    focusScenarioInputAtEnd();
   };
 
   const scenarioCommandKeys = (event: KeyboardEvent<HTMLInputElement>) => {
@@ -1147,6 +1175,16 @@ export default function GameClient() {
     if (event.key === "?" || event.code === "Slash" && event.shiftKey) {
       event.preventDefault();
       showScenarioCliOptions(event.currentTarget.value);
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      recallScenarioHistory("older");
+      return;
+    }
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      recallScenarioHistory("newer");
     }
   };
 
@@ -1388,6 +1426,7 @@ export default function GameClient() {
     const safeContextLine = `Why: ${safeContext.explanation} Use case: ${safeContext.useCase}`;
     setHistory((values) => [...values, result.input].slice(-20));
     setHistoryAt(-1);
+    setHistoryDraft("");
 
     if (!result.ok) {
       const code = result.code;
@@ -1636,21 +1675,22 @@ export default function GameClient() {
     }
     if (event.key === "ArrowUp") {
       event.preventDefault();
-      if (!history.length) return;
-      const next = historyAt < 0 ? history.length - 1 : Math.max(0, historyAt - 1);
-      setHistoryAt(next);
-      setInput(history[next]);
+      const recalled = navigateCommandHistory(history, input, historyAt, historyDraft, "older");
+      if (recalled.index >= 0 && !cliAssisted.current) markCliAssisted();
+      setHistoryAt(recalled.index);
+      setHistoryDraft(recalled.draft);
+      setInput(recalled.value);
+      focusInputAtEnd();
+      return;
     }
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      const next = historyAt + 1;
-      if (historyAt < 0 || next >= history.length) {
-        setHistoryAt(-1);
-        setInput("");
-      } else {
-        setHistoryAt(next);
-        setInput(history[next]);
-      }
+      const recalled = navigateCommandHistory(history, input, historyAt, historyDraft, "newer");
+      if (recalled.index >= 0 && !cliAssisted.current) markCliAssisted();
+      setHistoryAt(recalled.index);
+      setHistoryDraft(recalled.draft);
+      setInput(recalled.value);
+      focusInputAtEnd();
     }
   };
 
@@ -1661,6 +1701,8 @@ export default function GameClient() {
       showCliOptions(withoutQuestionMark);
       return;
     }
+    setHistoryAt(-1);
+    setHistoryDraft(value);
     setInput(value);
   };
 
@@ -1729,7 +1771,7 @@ export default function GameClient() {
         : "Your result and review schedule are saved locally. Correct answers for objectives that need review are available below.";
 
   return (
-    <main className={`shell ${progress.reducedMotion ? "reduced" : ""}`}>
+    <main className={`shell screen-${screen} ${progress.reducedMotion ? "reduced" : ""}`}>
       <div className="grid-bg" />
       <header>
         <div className="brand">
@@ -1968,7 +2010,7 @@ export default function GameClient() {
               </div>
             ) : (
               <>
-                <div className="log" ref={logRef} role="log" onMouseUp={copyTerminalSelection} title="Select text to copy it, as in PuTTY">
+                <div className="log" ref={logRef} role="log" onMouseUp={copyTerminalSelection} title="Highlight to copy">
                   {lines.map((line, index) => <div key={`${index}-${line}`}>{line}</div>)}
                 </div>
                 <form onSubmit={submit}>
@@ -2006,10 +2048,10 @@ export default function GameClient() {
           )}
           <p className="help">
             {activeMode === "easy"
-              ? "Tab/? stay at the prompt · Select terminal text to copy · Right-click or Ctrl+V pastes · Clean unaided recall advances spacing"
+              ? "Tab/? stay at the prompt · Up/Down recalls commands · Highlight to copy · Right-click or Ctrl+V pastes · Clean unaided recall advances spacing"
               : activeMode === "hardcore"
-                ? "Tab/? stay at the prompt · Select copies · Right-click or Ctrl+V pastes · One incorrect submission ends the run"
-                : "Tab/? stay at the prompt · Select terminal text to copy · Right-click or Ctrl+V pastes · Enter submits"}
+                ? "Tab/? stay at the prompt · Up/Down recalls commands · Highlight to copy · Right-click or Ctrl+V pastes · One incorrect submission ends the run"
+                : "Tab/? stay at the prompt · Up/Down recalls commands · Highlight to copy · Right-click or Ctrl+V pastes · Enter submits"}
           </p>
         </section>
       )}
@@ -2048,7 +2090,7 @@ export default function GameClient() {
               ref={scenarioLogRef}
               role="log"
               onMouseUp={copyScenarioSelection}
-              title="Select text to copy it, as in PuTTY"
+              title="Highlight to copy"
             >
               {scenarioLines.map((line, index) => <div key={`${index}-${line}`}>{line}</div>)}
             </div>
@@ -2080,7 +2122,7 @@ export default function GameClient() {
                   onKeyDown={scenarioCommandKeys}
                   onPaste={pasteScenarioCommand}
                   onContextMenu={(event) => void pasteScenarioOnRightClick(event)}
-                  aria-keyshortcuts="Tab ? Enter"
+                  aria-keyshortcuts="Tab ? ArrowUp ArrowDown Enter"
                   autoComplete="off"
                   autoCorrect="off"
                   spellCheck={false}
@@ -2101,7 +2143,7 @@ export default function GameClient() {
               <div><small>ROLLBACK</small><p>{scenarioLesson.rollback}</p></div>
             </section>
           )}
-          <p className="help">Manual prompts · Output must be interpreted · Select terminal text to copy · Right-click or Ctrl+V pastes · Input never leaves the simulator</p>
+          <p className="help">Manual prompts · Up/Down recalls commands · Output must be interpreted · Highlight to copy · Right-click or Ctrl+V pastes · Input never leaves the simulator</p>
         </section>
       )}
 
@@ -2233,7 +2275,7 @@ export default function GameClient() {
         </section>
       )}
 
-      {screen !== "round" && (
+      {screen !== "round" && screen !== "scenario" && (
         <footer>
           <span>Independent educational simulator · Not affiliated with or endorsed by Cisco</span>
           <span>IOS XE learning pack v0.1 · Simulator-tested draft</span>

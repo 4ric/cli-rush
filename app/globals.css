@@ -31,3 +31,28 @@ html{min-width:320px;overflow-x:hidden}body{min-width:0}.shell{min-height:100dvh
 .terminal form button.cli-assist{min-width:48px;background:transparent;color:var(--cyan);text-transform:uppercase}
 @media(max-width:650px){.terminal form button.cli-assist{min-width:40px;padding:0 6px}}
 .terminal .log{cursor:text;user-select:text;-webkit-user-select:text}
+
+/* Fluid canvas: use the viewport instead of holding the application to a desktop card. */
+:root{--page-gutter:clamp(12px,2.5vw,40px)}
+.shell{display:flex;flex-direction:column;min-height:100dvh}
+.screen-round,.screen-scenario{height:100dvh;overflow:hidden}
+.screen-round .game,.screen-scenario .game{min-height:0;flex:1 1 0;overflow-x:hidden;overflow-y:auto}
+header,.home,.game,.report,footer{width:calc(100% - var(--page-gutter) - var(--page-gutter));max-width:none}
+header{flex:0 0 auto}
+.home,.report{flex:1 0 auto}
+.game{flex:1 0 auto}
+.terminal{display:flex;flex:1 1 260px;min-height:180px;flex-direction:column;overflow:hidden}
+.terminal-head,.terminal>form,.scenario-choices,.scenario-complete-action{flex:0 0 auto}
+.terminal>.log{height:auto;min-height:120px;flex:1 1 auto}
+.terminal>.pause{flex:1 1 auto}
+
+@media(max-width:650px){
+  :root{--page-gutter:8px}
+  .terminal{min-height:180px;flex-basis:240px}
+  .terminal>.log{height:auto;min-height:110px}
+}
+
+@media(orientation:landscape) and (max-height:520px){
+  .terminal{min-height:100px;flex-basis:100px}
+  .terminal>.log{height:auto;min-height:40px}
+}
