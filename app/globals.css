@@ -56,3 +56,90 @@ header{flex:0 0 auto}
   .terminal{min-height:100px;flex-basis:100px}
   .terminal>.log{height:auto;min-height:40px}
 }
+
+/* Larger desktop type prevents dense CLI labels becoming microtext on high-resolution displays. */
+@media(min-width:1101px){
+  body{font-size:17px}
+  .brand strong{font-size:18px}
+  .lead,.report-title>p{font-size:18px}
+  .hero dd{font-size:26px}
+  .facts b{font-size:24px}
+  .queue em{font-size:20px}
+  .mode-picker-head strong{font-size:16px}
+  .mode-card>strong{font-size:26px}
+  .game-top>span b{font-size:16px}
+  .clock b{font-size:48px}
+  .metrics b{font-size:24px}
+  .objective h1{font-size:clamp(25px,1.5vw,32px)}
+  .learning-copy strong{font-size:17px}
+  .dashboard-card h2{font-size:24px}
+  .answer-review h3,.custom-list h3{font-size:18px}
+  .scenario-ticket b{font-size:13px}
+  .report-grid b{font-size:27px}
+  .final-score>b{font-size:54px}
+
+  .brand small,.controls button,.saved,.eyebrow,.primary kbd,.hero dt,
+  .aside-head,.demo small,.demo>span,.facts span,.queue small,
+  .mode-picker-head small,.mode-rule,.mode-card>span,.mode-card>small,
+  .game-top>span,.clock small,.metrics span,.objective p,.objective small,
+  .learning-copy small,.learning-actions>span,.terminal-head,.terminal-head button,
+  .terminal form button,.help,footer,.final-score small,.final-score em,
+  .report-grid small,.report-detail small,.answer-review-head,
+  .answer-review article small,.custom-list small,.custom-list article button,
+  .dashboard-card>small,.dashboard-status,.chapter-progress,
+  .validation-card summary,.scenario-ticket span,.scenario-lesson small{
+    font-size:11px
+  }
+
+  .demo p,.mode-card>p,.learning-copy p,.feedback p,.report-detail p,
+  .answer-review article p,.command-form label,.custom-status,.dashboard-card p,
+  .teaching-card p,.scenario-choices button,.scenario-lesson p{
+    font-size:14px
+  }
+
+  .demo code,.learning-copy code,.feedback code,.answer-review code,
+  .custom-list code,.dashboard-card code,.command-form input,
+  .command-form textarea,.command-form select{
+    font-size:15px
+  }
+
+  .terminal .log{font-size:16px;line-height:1.6}
+  .terminal form>span,.terminal input{font-size:17px}
+  .feedback strong{font-size:15px}
+  .report-grid span,.validation-card details{font-size:12px}
+}
+
+@media(min-width:2000px){
+  body{font-size:18px}
+  .brand strong{font-size:20px}
+  .lead,.report-title>p{font-size:20px}
+  .objective h1{font-size:34px}
+  .learning-copy strong{font-size:19px}
+
+  .brand small,.controls button,.saved,.eyebrow,.primary kbd,.hero dt,
+  .aside-head,.demo small,.demo>span,.facts span,.queue small,
+  .mode-picker-head small,.mode-rule,.mode-card>span,.mode-card>small,
+  .game-top>span,.clock small,.metrics span,.objective p,.objective small,
+  .learning-copy small,.learning-actions>span,.terminal-head,.terminal-head button,
+  .terminal form button,.help,footer,.final-score small,.final-score em,
+  .report-grid small,.report-detail small,.answer-review-head,
+  .answer-review article small,.custom-list small,.custom-list article button,
+  .dashboard-card>small,.dashboard-status,.chapter-progress,
+  .validation-card summary,.scenario-ticket span,.scenario-lesson small{
+    font-size:13px
+  }
+
+  .demo p,.mode-card>p,.learning-copy p,.feedback p,.report-detail p,
+  .answer-review article p,.command-form label,.custom-status,.dashboard-card p,
+  .teaching-card p,.scenario-choices button,.scenario-lesson p{
+    font-size:16px
+  }
+
+  .terminal .log{font-size:18px}
+  .terminal form>span,.terminal input{font-size:19px}
+  .feedback strong{font-size:17px}
+  .learning-copy code,.feedback code,.answer-review code,.custom-list code,
+  .dashboard-card code,.command-form input,.command-form textarea,
+  .command-form select{font-size:17px}
+  .report-grid span,.validation-card details{font-size:14px}
+}
