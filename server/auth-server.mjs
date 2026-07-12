@@ -278,7 +278,7 @@ const server = http.createServer(async (request, response) => {
         : { "content-type": "text/html; charset=utf-8" });
       return;
     }
-    if (!validOrigin(request) || !["same-origin", "none"].includes(String(request.headers["sec-fetch-site"] || ""))) {
+    if (!validOrigin(request)) {
       send(response, 403, loginPage("The login request did not come from this site."), { "content-type": "text/html; charset=utf-8" });
       return;
     }

@@ -91,7 +91,7 @@ test("single-user gateway protects the app and persists validated custom command
   const login = await fetch(`${origin}/login`, {
     method: "POST",
     redirect: "manual",
-    headers: { "content-type": "application/x-www-form-urlencoded", origin, "sec-fetch-site": "same-origin" },
+    headers: { "content-type": "application/x-www-form-urlencoded", origin },
     body: new URLSearchParams({ username: "ignas", password }),
   });
   assert.equal(login.status, 303);
