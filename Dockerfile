@@ -1,9 +1,10 @@
 FROM node:24-alpine AS build
 WORKDIR /app
+RUN apk add --no-cache bash
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
-RUN npm run test:unit && npm run build
+RUN npm run build && npm prune --omit=dev
 
 FROM node:24-alpine AS runtime
 ENV NODE_ENV=production PORT=3000 CLI_RUSH_DATA_DIR=/data

@@ -97,82 +97,20 @@ npm test
 
 ## Docker deployment
 
-The requested deployment directory is written exactly as supplied:
+Deployment archives are designed to extract to:
 
 ```text
-/data/contrainers/cli-rush
+/data/containers/cli-rush
 ```
 
-If `contrainers` was a typo, change both the directory and the volume path in `compose.yaml` before deploying.
-
-### 1. Clone and enter the repository
+From an extracted archive, initialise storage and login secrets without installing Node.js on the host:
 
 ```bash
-mkdir -p /data/contrainers
-cd /data/contrainers
-git clone <repository-url> cli-rush
-cd cli-rush
+cd /data/containers/cli-rush
+sh scripts/docker-setup.sh
 ```
 
-### 2. Configure the public address
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env` and set the final HTTPS address used through Nginx:
-
-```dotenv
-CLI_RUSH_USERNAME=ignas
-CLI_RUSH_PUBLIC_ORIGIN=https://cli-rush.example.com
-```
-
-### 3. Create the login secrets
-
-Run this from an interactive terminal. The password is not placed in shell history. If Node.js 24 is installed on the host:
-
-```bash
-node scripts/init-secrets.mjs
-```
-
-Or use Docker itself, without installing Node.js on the host:
-
-```bash
-docker run --rm -it -v "$PWD:/app" -w /app node:24-alpine node scripts/init-secrets.mjs
-```
-
-The generated `secrets/` directory is ignored by Git. Back it up securely. Rotating `session_secret` signs every existing session out.
-
-### 4. Build and start
-
-```bash
-docker compose up -d --build
-docker compose ps
-```
-
-The application listens only on `127.0.0.1:3080`. It is not directly exposed to the network.
-
-### 5. Configure Nginx
-
-Use `deploy/nginx.conf.example` as the starting point. Replace the hostname and add the existing TLS certificate directives. The important controls are:
-
-- HTTPS only.
-- Proxy to `http://127.0.0.1:3080`.
-- Overwrite forwarded IP and scheme headers.
-- Do not expose port 3080 through the firewall.
-- Rate-limit `/login`.
-
-After Nginx is active, open the configured HTTPS URL and sign in with the single configured username and password.
-
-## Persistent data
-
-`compose.yaml` mounts:
-
-```text
-/data/contrainers/cli-rush/data -> /data
-```
-
-Custom command content survives container rebuilds. Learning progress remains local to the browser, preserving the original local-first model.
+Then set the exact public HTTPS origin in `.env` and start with `docker compose up -d --build`. The application remains bound to `127.0.0.1:3080`; `./data` and `./secrets` survive rebuilds. See [DOCKER-DEPLOY.md](DOCKER-DEPLOY.md) for installation, reverse-proxy, update, backup and removal instructions.
 
 ## Custom commands
 

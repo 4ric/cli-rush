@@ -1,3 +1,5 @@
+name: cli-rush
+
 services:
   cli-rush:
     build:
@@ -15,7 +17,7 @@ services:
       CLI_RUSH_PASSWORD_HASH_FILE: /run/secrets/password_hash
       CLI_RUSH_SESSION_SECRET_FILE: /run/secrets/session_secret
     volumes:
-      - /data/contrainers/cli-rush/data:/data
+      - ./data:/data
     secrets:
       - password_hash
       - session_secret
@@ -23,9 +25,40 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    pids_limit: 100
     read_only: true
     tmpfs:
       - /tmp:size=32m,noexec,nosuid,nodev
+
+  init-storage:
+    image: alpine:3.22
+    profiles: ["setup"]
+    command: ["sh", "-c", "mkdir -p /data && chown -R 1000:1000 /data"]
+    volumes:
+      - ./data:/data
+    network_mode: none
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+    security_opt:
+      - no-new-privileges:true
+
+  init-secrets:
+    image: node:24-alpine
+    profiles: ["setup"]
+    working_dir: /workspace
+    command: ["node", "init-secrets.mjs"]
+    stdin_open: true
+    tty: true
+    volumes:
+      - ./scripts/init-secrets.mjs:/workspace/init-secrets.mjs:ro
+      - ./secrets:/workspace/secrets
+    network_mode: none
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
 secrets:
   password_hash:
