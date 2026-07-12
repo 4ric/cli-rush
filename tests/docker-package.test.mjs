@@ -6,7 +6,7 @@ const read = path => readFile(new URL(`../${path}`, import.meta.url), "utf8");
 
 test("Compose keeps the service private, persistent and hardened", async () => {
   const compose = await read("compose.yaml");
-  assert.match(compose, /127\.0\.0\.1:3080:3000/u);
+  assert.match(compose, /CLI_RUSH_BIND_ADDRESS:-127\.0\.0\.1\}:3080:3000/u);
   assert.match(compose, /\.\/data:\/data/u);
   assert.doesNotMatch(compose, /contrainers|0\.0\.0\.0:3080/u);
   assert.match(compose, /read_only: true/u);

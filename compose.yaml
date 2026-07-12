@@ -8,7 +8,7 @@ services:
     restart: unless-stopped
     init: true
     ports:
-      - "127.0.0.1:3080:3000"
+      - "${CLI_RUSH_BIND_ADDRESS:-127.0.0.1}:3080:3000"
     environment:
       CLI_RUSH_USERNAME: ${CLI_RUSH_USERNAME:-ignas}
       CLI_RUSH_COOKIE_SECURE: "true"

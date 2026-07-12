@@ -22,10 +22,13 @@ Edit `.env` before starting the service:
 
 ```dotenv
 CLI_RUSH_USERNAME=ignas
+CLI_RUSH_BIND_ADDRESS=127.0.0.1
 CLI_RUSH_PUBLIC_ORIGIN=https://cli-rush.example.com
 ```
 
 `CLI_RUSH_PUBLIC_ORIGIN` must exactly match the final HTTPS origin, including a non-standard port when one is present. Do not add a trailing slash.
+
+Keep `CLI_RUSH_BIND_ADDRESS=127.0.0.1` when Nginx runs on the Docker host. To permit direct access from a private LAN while configuring the proxy, set it to the server address, for example `192.168.1.6`, and use `http://192.168.1.6:3080`.
 
 Build and start:
 
