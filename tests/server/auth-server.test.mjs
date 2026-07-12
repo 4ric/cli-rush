@@ -71,6 +71,15 @@ test("single-user gateway protects the app and persists validated custom command
   const unauthenticated = await fetch(`${origin}/`, { redirect: "manual" });
   assert.equal(unauthenticated.status, 303);
   assert.equal(unauthenticated.headers.get("location"), "/login");
+  assert.equal(unauthenticated.headers.get("referrer-policy"), "same-origin");
+
+  const rejectedWithoutSource = await fetch(`${origin}/login`, {
+    method: "POST",
+    redirect: "manual",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ username: "ignas", password }),
+  });
+  assert.equal(rejectedWithoutSource.status, 403);
 
   const rejectedOrigin = await fetch(`${origin}/login`, {
     method: "POST",
@@ -106,7 +115,6 @@ test("single-user gateway protects the app and persists validated custom command
 
   const publicRequestHeaders = {
     host: "cli-rush.example.test",
-    origin: publicOrigin,
     "sec-fetch-site": "same-origin",
     "x-forwarded-for": "192.0.2.10",
     "x-forwarded-proto": "https",
@@ -114,7 +122,7 @@ test("single-user gateway protects the app and persists validated custom command
   const publicLogin = await fetch(`${origin}/login`, {
     method: "POST",
     redirect: "manual",
-    headers: { ...publicRequestHeaders, "content-type": "application/x-www-form-urlencoded" },
+    headers: { ...publicRequestHeaders, referer: `${publicOrigin}/login`, "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ username: "ignas", password }),
   });
   assert.equal(publicLogin.status, 303);

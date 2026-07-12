@@ -145,7 +145,7 @@ const securityHeaders = (extra = {}) => ({
   "content-security-policy": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
   "cross-origin-opener-policy": "same-origin",
   "permissions-policy": "camera=(), microphone=(), geolocation=()",
-  "referrer-policy": "no-referrer",
+  "referrer-policy": "same-origin",
   "x-content-type-options": "nosniff",
   "x-frame-options": "DENY",
   ...(cookieSecureByDefault ? { "strict-transport-security": "max-age=31536000; includeSubDomains" } : {}),
@@ -167,11 +167,22 @@ const readBody = async (request, limit = 1024 * 1024) => {
   }
   return Buffer.concat(chunks);
 };
+const requestSourceOrigin = (request) => {
+  const originHeader = request.headers.origin;
+  const source = typeof originHeader === "string" && originHeader !== "null"
+    ? originHeader
+    : request.headers.referer;
+  if (typeof source !== "string") return null;
+  try {
+    return new URL(source).origin;
+  } catch {
+    return null;
+  }
+};
 const validOrigin = (request) => {
-  const origin = request.headers.origin;
-  return typeof origin === "string" && (allowedOrigins.size > 0
-    ? allowedOrigins.has(origin)
-    : origin === inferredOrigin(request));
+  const origin = requestSourceOrigin(request);
+  if (!origin) return false;
+  return allowedOrigins.size > 0 ? allowedOrigins.has(origin) : origin === inferredOrigin(request);
 };
 
 function validateCustomCommands(value) {
@@ -279,6 +290,11 @@ const server = http.createServer(async (request, response) => {
       return;
     }
     if (!validOrigin(request)) {
+      console.warn("Rejected login source.", JSON.stringify({
+        origin: requestSourceOrigin(request),
+        host: request.headers.host || null,
+        forwardedProtocol: firstHeaderValue(request.headers["x-forwarded-proto"]) || null,
+      }));
       send(response, 403, loginPage("The login request did not come from this site."), { "content-type": "text/html; charset=utf-8" });
       return;
     }
