@@ -35,8 +35,8 @@ html{min-width:320px;overflow-x:hidden}body{min-width:0}.shell{min-height:100dvh
 /* Fluid canvas: use the viewport instead of holding the application to a desktop card. */
 :root{--page-gutter:clamp(12px,2.5vw,40px)}
 .shell{display:flex;flex-direction:column;min-height:100dvh}
-.screen-round,.screen-scenario{height:100dvh;overflow:hidden}
-.screen-round .game,.screen-scenario .game{min-height:0;flex:1 1 0;overflow-x:hidden;overflow-y:auto}
+.screen-round,.screen-scenario,.screen-guided-lab{height:100dvh;overflow:hidden}
+.screen-round .game,.screen-scenario .game,.screen-guided-lab .game{min-height:0;flex:1 1 0;overflow-x:hidden;overflow-y:auto}
 header,.home,.game,.report,footer{width:calc(100% - var(--page-gutter) - var(--page-gutter));max-width:none}
 header{flex:0 0 auto}
 .home,.report{flex:1 0 auto}
@@ -58,7 +58,7 @@ header{flex:0 0 auto}
 }
 
 /* Larger desktop type prevents dense CLI labels becoming microtext on high-resolution displays. */
-@media(min-width:1101px){
+@media(min-width:1101px) and (min-height:850px){
   body{font-size:17px}
   .brand strong{font-size:18px}
   .lead,.report-title>p{font-size:18px}
@@ -109,7 +109,7 @@ header{flex:0 0 auto}
   .report-grid span,.validation-card details{font-size:12px}
 }
 
-@media(min-width:2000px){
+@media(min-width:2000px) and (min-height:1100px){
   body{font-size:18px}
   .brand strong{font-size:20px}
   .lead,.report-title>p{font-size:20px}
@@ -579,7 +579,7 @@ footer{border-color:rgba(177,184,255,.14);color:#8f92aa}
 .scenario-lesson .lesson-example{grid-column:1/-1;border-top:1px solid var(--line);border-right:0;background:rgba(255,180,92,.035)}
 .lesson-example code{display:block;margin-top:7px;color:#ffca72;font:600 11px/1.55 var(--font-geist-mono);white-space:normal}
 
-@media(min-width:1101px){
+@media(min-width:1101px) and (min-height:850px){
   .mode-map-stage small,.topology-node small,.timed-nudge small,.scenario-hint small{font-size:11px}
   .mode-map-stage code,.topology-node b,.lesson-example code{font-size:14px}
   .scenario-hint p{font-size:14px}
@@ -612,4 +612,87 @@ footer{border-color:rgba(177,184,255,.14);color:#8f92aa}
 
 @media(max-width:420px){
   .scenario-ticket{grid-template-columns:minmax(0,1fr)}
+}
+
+/* Labs library and guided device builds. */
+.labs-library{grid-column:1/-1;min-width:0;margin-top:4px;padding:22px;border:1px solid rgba(177,184,255,.2);border-radius:20px;background:linear-gradient(145deg,rgba(18,21,45,.9),rgba(10,12,27,.92))}
+.labs-library-head{display:flex;align-items:end;justify-content:space-between;gap:28px;margin-bottom:14px}
+.labs-library-head small{color:#aeb7ff;font:700 9px var(--font-geist-mono);letter-spacing:.12em}
+.labs-library-head h2{margin:4px 0 0;font-size:30px}
+.labs-library-head p{max-width:620px;margin:0;color:#b7b9ce;line-height:1.55}
+.lab-list{display:grid;gap:10px;margin:0;padding:0;list-style:none}
+.lab-list .lab-card{display:grid;grid-template-columns:64px minmax(0,1fr) minmax(180px,auto);gap:18px;align-items:center;padding:18px}
+.lab-list .lab-card:hover{transform:translateX(3px)}
+.lab-number{display:grid;width:52px;height:52px;place-items:center;border:1px solid rgba(255,180,92,.3);border-radius:16px;background:linear-gradient(145deg,rgba(255,180,92,.12),rgba(170,120,255,.08));color:#ffca72;font:760 18px var(--font-geist-mono)}
+.lab-list h3{margin:6px 0 7px;color:#fff;font-size:18px}
+.lab-list p{margin:0}
+.lab-list-actions{display:flex;min-width:180px;flex-direction:column;align-items:stretch;gap:7px}
+.lab-list-actions>span{color:#aeb7ff;font:700 9px var(--font-geist-mono);text-align:center;text-transform:uppercase}
+.lab-list-actions .primary,.lab-list-actions .secondary{width:100%;min-height:40px;margin:0}
+.case-note{margin:14px 0 0;padding:12px 14px;border:1px solid rgba(130,144,255,.2);border-radius:12px;background:rgba(130,144,255,.05);color:#bfc2d7;font-size:12px;line-height:1.55}
+.case-note code{color:#ffca72}
+
+.guided-build{gap:0}
+.lab-phase-map{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:7px;margin-top:12px}
+.lab-phase-map span{display:flex;min-width:0;align-items:center;gap:7px;padding:8px;border:1px solid rgba(177,184,255,.14);border-radius:11px;background:rgba(12,14,31,.65);color:#8589a7;font:700 9px var(--font-geist-mono);text-transform:uppercase}
+.lab-phase-map i{display:grid;width:22px;height:22px;flex:0 0 22px;place-items:center;border:1px solid rgba(177,184,255,.18);border-radius:50%;font-style:normal}
+.lab-phase-map span.active{border-color:rgba(255,180,92,.45);background:rgba(255,180,92,.09);color:#fff}
+.lab-phase-map span.active i{border-color:#ffb45c;color:#ffca72;box-shadow:0 0 16px rgba(255,180,92,.2)}
+.lab-phase-map span.complete{border-color:rgba(130,144,255,.3);color:#b8c0ff}
+.lab-phase-map span.complete i{background:rgba(130,144,255,.14);color:#bdc5ff}
+.guided-objective h1{font-size:clamp(21px,2vw,29px)}
+.guided-context{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;margin-top:13px;padding-top:12px;border-top:1px solid rgba(177,184,255,.14)}
+.guided-context span{color:#c6c8da;font-size:12px;line-height:1.5}
+.guided-context small{display:block;margin-bottom:5px;color:#9296b2;font:700 8px var(--font-geist-mono);letter-spacing:.1em}
+.guided-context code{display:block;padding:8px 10px;border:1px solid rgba(255,180,92,.22);border-radius:9px;background:#0b0d1d;color:#ffca72;font:650 13px var(--font-geist-mono);white-space:nowrap}
+.guided-terminal{flex-basis:230px}
+.command-breakdown{display:grid!important;grid-template-columns:repeat(5,minmax(0,1fr));gap:7px;margin-top:10px}
+.command-breakdown span{min-width:0;padding:8px;border:1px solid rgba(177,184,255,.16);border-radius:10px;background:rgba(8,10,23,.65)}
+.command-breakdown code{display:block;margin:0!important;white-space:normal}
+.command-breakdown small{display:block;margin-top:6px;color:#b7b9ce!important;font:600 9px/1.4 var(--font-geist-sans)!important;letter-spacing:0!important}
+
+@media(max-width:900px){
+  .lab-list .lab-card{grid-template-columns:52px minmax(0,1fr)}
+  .lab-list-actions{grid-column:2;min-width:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+  .lab-list-actions>span{grid-column:1/-1;text-align:left}
+  .lab-phase-map{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .command-breakdown{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+
+@media(max-width:650px){
+  .labs-library{padding:14px;border-radius:16px}
+  .labs-library-head{align-items:start;flex-direction:column;gap:8px}
+  .labs-library-head h2{font-size:25px}
+  .lab-list .lab-card{grid-template-columns:42px minmax(0,1fr);gap:11px;padding:14px}
+  .lab-number{width:40px;height:40px;border-radius:12px;font-size:14px}
+  .lab-list h3{font-size:16px}
+  .lab-list-actions{grid-column:1/-1;grid-template-columns:minmax(0,1fr)}
+  .lab-list-actions>span{grid-column:auto}
+  .lab-phase-map{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .guided-context{grid-template-columns:minmax(0,1fr)}
+  .command-breakdown{grid-template-columns:minmax(0,1fr)}
+  .controls button{font-size:9px;letter-spacing:.025em}
+}
+
+/* Compact desktop: a wide but short window must not inherit full 2K enlargement. */
+@media(min-width:1101px) and (max-height:849px){
+  :root{--page-gutter:clamp(16px,1.55vw,30px)}
+  header{min-height:58px;padding:5px 12px}
+  .brand>b{width:34px;height:34px}
+  .brand strong{font-size:14px}.brand small{font-size:8px}
+  .controls button,.saved{min-height:31px;padding-inline:10px;font-size:8px}
+  .game{padding:9px 0 8px}
+  .game-top>span b{font-size:12px}.clock b{font-size:34px}.metrics b{font-size:17px}.metrics{gap:22px}
+  .track{margin-top:6px}
+  .objective{margin-top:7px;padding:10px 15px}
+  .objective p{margin-bottom:5px}.objective h1{font-size:22px}
+  .scenario-ticket{margin-top:8px;padding-top:8px}.scenario-ticket span{font-size:9px}.scenario-ticket b{font-size:12px}
+  .scenario-topology{margin-top:8px;padding-top:8px}.topology-node{padding:6px}.topology-node small{font-size:8px}.topology-node b{font-size:11px}
+  .scenario-hint{margin-top:6px;padding:8px 12px}.scenario-hint strong{font-size:14px}.scenario-hint p{margin-top:3px;font-size:12px;line-height:1.35}.scenario-hint code{margin-top:5px;padding:4px 7px;font-size:12px}.scenario-hint>button{min-height:34px}
+  .terminal{margin-top:6px;min-height:150px;flex-basis:190px}.terminal-head{height:31px;font-size:9px}.terminal>.log{min-height:55px;padding:8px 16px;font-size:13px;line-height:1.45}.terminal form{height:42px;margin:0 12px 7px}.terminal input{height:40px;font-size:14px}.terminal form>span{font-size:14px}.terminal form button{font-size:9px;min-width:55px}
+  .scenario-lesson{margin-top:6px}.scenario-lesson>div{padding:8px 10px}.scenario-lesson small{font-size:9px}.scenario-lesson p{margin-top:4px;font-size:11px;line-height:1.35}.scenario-lesson .lesson-example{display:none}
+  .help{margin:5px 0 0;font-size:8px}
+  .lab-phase-map{margin-top:6px}.lab-phase-map span{padding:5px;font-size:7px}.lab-phase-map i{width:18px;height:18px;flex-basis:18px}
+  .guided-context{margin-top:7px;padding-top:7px}.guided-context span{font-size:10px}.guided-context code{padding:5px 8px;font-size:11px}
+  .command-breakdown{grid-template-columns:repeat(5,minmax(0,1fr));gap:4px;margin-top:6px}.command-breakdown span{padding:5px}.command-breakdown code{font-size:11px}.command-breakdown small{font-size:10px!important}
 }

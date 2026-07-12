@@ -71,6 +71,24 @@ test("progressive hints teach reasoning before showing the seeded command", () =
   assert.match(interpretation.explanation, /Status|Protocol/iu);
 });
 
+test("faulty default-route hint explains every token and preserves the connected route", () => {
+  let state = createIpv4Scenario(1);
+  state = { ...state, phase: "remove-faulty-route", mode: "global", fault: "wrong-default-next-hop", defaultRoute: state.parameters.wrongGateway };
+  const reasoning = getIpv4ScenarioHint(state, 1);
+  assert.match(reasoning.explanation, /exact configuration statement/iu);
+  assert.match(reasoning.explanation, /connected/iu);
+  const worked = getIpv4ScenarioHint(state, 2);
+  assert.match(worked.explanation, /prefix \/0/iu);
+  assert.equal(worked.breakdown?.length, 5);
+  assert.equal(worked.breakdown?.at(-1)?.token, state.parameters.wrongGateway);
+});
+
+test("IPv4 lab uses short interface names and simple private addressing", () => {
+  const states = [createIpv4Scenario(1), createIpv4Scenario(2), createIpv4Scenario(3), createIpv4Scenario(4), createIpv4Scenario(5)];
+  assert.ok(states.every(state => /^(?:fa|gi|te)\d+\/\d+\/\d+$/u.test(state.parameters.interfaceName)));
+  assert.ok(states.every(state => /^(?:10\.|192\.168\.)/u.test(state.parameters.localAddress)));
+});
+
 test("saved IPv4 lab state restores safely and rejects catalogue drift", () => {
   const configured = reachConfiguredInterface(31);
   assert.deepEqual(restoreIpv4ScenarioState(JSON.parse(JSON.stringify(configured))), configured);

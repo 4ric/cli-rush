@@ -126,39 +126,40 @@ export interface Ipv4ScenarioHint {
   heading: string;
   explanation: string;
   example: string | null;
+  breakdown?: Array<{ token: string; meaning: string }>;
   visualFocus: "prompt" | "interface" | "route" | "verification" | "save";
 }
 
 const variants: Ipv4ScenarioParameters[] = [
   {
-    interfaceName: "GigabitEthernet0/1",
-    localAddress: "192.0.2.1",
+    interfaceName: "gi0/0/1",
+    localAddress: "192.168.10.1",
     subnetMask: "255.255.255.0",
     prefixLength: 24,
-    networkAddress: "192.0.2.0",
-    gateway: "192.0.2.254",
-    wrongGateway: "192.0.2.253",
-    remoteTarget: "198.51.100.10",
+    networkAddress: "192.168.10.0",
+    gateway: "192.168.10.254",
+    wrongGateway: "192.168.10.253",
+    remoteTarget: "1.1.1.1",
   },
   {
-    interfaceName: "GigabitEthernet0/2",
-    localAddress: "198.51.100.1",
+    interfaceName: "fa0/0/1",
+    localAddress: "192.168.20.1",
     subnetMask: "255.255.255.0",
     prefixLength: 24,
-    networkAddress: "198.51.100.0",
-    gateway: "198.51.100.254",
-    wrongGateway: "198.51.100.253",
-    remoteTarget: "203.0.113.10",
+    networkAddress: "192.168.20.0",
+    gateway: "192.168.20.254",
+    wrongGateway: "192.168.20.253",
+    remoteTarget: "8.8.8.8",
   },
   {
-    interfaceName: "GigabitEthernet1/0",
-    localAddress: "203.0.113.1",
+    interfaceName: "te0/1/1",
+    localAddress: "10.10.10.1",
     subnetMask: "255.255.255.0",
     prefixLength: 24,
-    networkAddress: "203.0.113.0",
-    gateway: "203.0.113.254",
-    wrongGateway: "203.0.113.253",
-    remoteTarget: "192.0.2.10",
+    networkAddress: "10.10.10.0",
+    gateway: "10.10.10.254",
+    wrongGateway: "10.10.10.253",
+    remoteTarget: "9.9.9.9",
   },
 ];
 
@@ -416,6 +417,41 @@ export const getIpv4ScenarioHint = (
         : "The row should say unassigned and administratively down. Protocol down then agrees with the disabled interface state.",
       example: null,
       visualFocus: "interface",
+    };
+  }
+
+  if (state.phase === "remove-faulty-route") {
+    return {
+      heading: level === 1 ? "Remove the exact bad static route, not the connected network" : "Read the removal command from left to right",
+      explanation: level === 1
+        ? `The routing table showed a default route through ${state.parameters.wrongGateway}. In IOS configuration, no before a complete command removes that exact configuration statement. The connected ${state.parameters.networkAddress}/${state.parameters.prefixLength} route comes from the interface address, so removing a separate 0.0.0.0/0 static route cannot delete it.`
+        : `This command exactly mirrors the incorrect static route and prefixes it with no. The two 0.0.0.0 values mean destination 0.0.0.0 with mask 0.0.0.0—prefix /0—which matches any destination only when no more-specific route exists. ${state.parameters.wrongGateway} identifies the incorrect next hop to remove.`,
+      example: level === 2 ? example : null,
+      breakdown: level === 2 ? [
+        { token: "no", meaning: "Remove the matching configuration statement" },
+        { token: "ip route", meaning: "The static IPv4 route feature" },
+        { token: "0.0.0.0", meaning: "Destination network: all-zero default" },
+        { token: "0.0.0.0", meaning: "Mask: /0, so it is the least-specific route" },
+        { token: state.parameters.wrongGateway, meaning: "The exact incorrect next hop shown in the routing table" },
+      ] : undefined,
+      visualFocus: "route",
+    };
+  }
+
+  if (state.phase === "add-default-route") {
+    return {
+      heading: level === 1 ? "Build a least-specific route towards the documented gateway" : "Read the default route from left to right",
+      explanation: level === 1
+        ? `A default route is used only when the routing table has no more-specific match. Keep the connected ${state.parameters.networkAddress}/${state.parameters.prefixLength} route; add a separate 0.0.0.0/0 path through ${state.parameters.gateway}.`
+        : `The first 0.0.0.0 is the destination and the second is its mask. Together they represent /0, the gateway of last resort. The final value is the documented next hop on the directly connected LAN.`,
+      example: level === 2 ? example : null,
+      breakdown: level === 2 ? [
+        { token: "ip route", meaning: "Create a static IPv4 route" },
+        { token: "0.0.0.0", meaning: "Destination network: all-zero default" },
+        { token: "0.0.0.0", meaning: "Mask: /0, matching otherwise-unknown destinations" },
+        { token: state.parameters.gateway, meaning: "Next hop supplied by the work order" },
+      ] : undefined,
+      visualFocus: "route",
     };
   }
 

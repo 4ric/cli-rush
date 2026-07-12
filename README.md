@@ -37,7 +37,11 @@ This is an independent educational simulator. It is not affiliated with or endor
 - Correct commands and explanations for missed items appear only after the timer reaches zero.
 - Combination scoring and capped speed bonuses.
 - Local progress, due-led spaced review and a visible beginner curriculum.
-- A complete stateful IPv4 field lab: manual prompt navigation, interface configuration, output interpretation, seeded route diagnosis, repair, reachability verification, save and verified rollback.
+- An accessible three-lab library with local resume and restart controls.
+- Lab 1 is a complete stateful IPv4 field lab using short interface aliases and simple private addressing: manual prompt navigation, interface configuration, output interpretation, seeded route diagnosis, repair, reachability verification, save and verified rollback.
+- Lab 2 builds a branch router from defaults through hostname, secrets, local fallback, simulated RADIUS, AAA, SSH, DNS, DHCP, routed interfaces, verification and save.
+- Lab 3 builds an access switch from defaults through the same secure management foundation, then VLANs, Fast/Gigabit/FortyGigabit interfaces, copper/fibre uplinks, edge protection, management SVI, verification and save. DHCP server configuration is intentionally omitted.
+- IOS command keywords are accepted without regard to capitalisation; password and shared-secret values remain case-sensitive.
 - Named Cisco CML image targets and an integrity-checked offline evidence workflow. The UI continues to show zero image-verified objectives until real licensed-image evidence exists.
 - Custom question, answer and explanation management.
 - Docker persistence for custom commands under `/data`.
@@ -58,6 +62,7 @@ lib/learning.ts              Deterministic Easy-mode learning aids
 lib/scheduler.ts             Review scheduling and score calculation
 lib/command-teaching.ts      Structured instructional metadata
 lib/ipv4-scenario.ts         Stateful configuration and troubleshooting lab
+lib/device-build-lab.ts      Deterministic router and switch foundation labs
 lib/platform-validation.ts   Named target assignments and trust status
 docs/catalogue-validation.md Offline named-image evidence process
 server/auth-server.mjs       Docker authentication and persistence gateway
@@ -185,7 +190,7 @@ Custom entries are data only. They cannot contain JavaScript, regular expression
 ## Known limitations
 
 - The expanded pack prioritises CCNA-level recall. It is not a complete command reference.
-- Most expanded commands remain deterministic recall items; the IPv4 field lab is the first vertically complete stateful scenario.
+- Most expanded commands remain deterministic recall items. The IPv4 troubleshooting lab and guided router/switch builds provide vertically complete practical workflows.
 - All objectives have named CML target assignments, but no objective is labelled image-verified because no authorised CML image or captured lab evidence was available in this workspace. See `docs/catalogue-validation.md`.
 - Local learning progress is not yet synchronised through the Docker volume.
 - Login rate limits reset when the container restarts; Nginx provides a second rate-limit layer.

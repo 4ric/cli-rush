@@ -22,7 +22,7 @@ The built-in catalogue currently contains:
 
 Implemented player flow:
 
-1. Follow a prerequisite-gated beginner path, run due-only Daily Recall, launch the stateful IPv4 field lab, or choose Easy, Normal, Hard or Hardcore rules.
+1. Follow a prerequisite-gated beginner path, run due-only Daily Recall, choose one of three stateful Labs, or select Easy, Normal, Hard or Hardcore rules.
 2. Learn commands without time pressure using retrieval strategy, semantic structure, command-family and reveal stages.
 3. Move into sixty-second time-bank modes: correct commands add time, Normal and Hard errors remove time, and one Hardcore error ends the run.
 4. Read an operational objective and Cisco-style prompt.
@@ -63,6 +63,7 @@ Also implemented:
 | `lib/scheduler.ts` | Spaced review intervals and scoring |
 | `lib/command-teaching.ts` | Purpose, syntax, verification, trap, rollback and risk teaching data |
 | `lib/ipv4-scenario.ts` | Stateful IPv4 configuration and troubleshooting lab |
+| `lib/device-build-lab.ts` | Deterministic router and switch foundation builds |
 | `lib/platform-validation.ts` | Named CML target assignments and validation status |
 | `docs/catalogue-validation.md` | Offline image-evidence procedure and current trust boundary |
 | `server/auth-server.mjs` | Docker HTTP gateway, login and custom-content persistence |
@@ -99,7 +100,7 @@ The catalogue is a simulator-tested draft. It is broad and CCNA-oriented, but ha
 
 ## Known limitations
 
-1. Most expanded catalogue entries validate recall rather than modifying detailed state; the IPv4 field lab is the first complete stateful scenario.
+1. Most expanded catalogue entries validate recall rather than modifying detailed state; the lab library contains a complete IPv4 troubleshooting scenario plus guided router and switch builds.
 2. Learning progress does not synchronise across browsers or through the Docker data volume.
 3. Login rate-limit counters reset with the container; the supplied Nginx configuration adds a second layer.
 4. Every command has a named CML target assignment, but zero commands are labelled image-verified until real licensed-image evidence is captured and reviewed.

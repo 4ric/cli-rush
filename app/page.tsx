@@ -75,10 +75,6 @@ import {
 } from "@/lib/scheduler.ts";
 import { teachingFor } from "@/lib/command-teaching.ts";
 import {
-  catalogueValidationSummary,
-  namedLabTargets,
-} from "@/lib/platform-validation.ts";
-import {
   createIpv4Scenario,
   getIpv4ScenarioHint,
   getIpv4ScenarioChoices,
@@ -91,9 +87,23 @@ import {
   type Ipv4ScenarioChoiceId,
   type Ipv4ScenarioState,
 } from "@/lib/ipv4-scenario.ts";
+import {
+  completeDeviceBuildInput,
+  createDeviceBuildState,
+  deviceBuildLabs,
+  deviceBuildPrompt,
+  getDeviceBuildDefinition,
+  getDeviceBuildHint,
+  getDeviceBuildStep,
+  restoreDeviceBuildState,
+  runDeviceBuildCommand,
+  type DeviceBuildLabId,
+  type DeviceBuildResult,
+  type DeviceBuildState,
+} from "@/lib/device-build-lab.ts";
 import { navigateCommandHistory } from "@/lib/command-history.ts";
 
-type Screen = "home" | "round" | "report" | "manage" | "scenario" | "scenario-report";
+type Screen = "home" | "round" | "report" | "manage" | "scenario" | "scenario-report" | "guided-lab";
 type FinishReason = "timer" | "early" | "hardcore" | "practice" | "partial" | "complete";
 type ReviewReason = "incorrect" | "recovered" | "unanswered";
 type SessionKind = "practice" | "chapter" | "daily" | "rush";
@@ -377,6 +387,242 @@ const ScenarioTopology = ({ state }: { state: Ipv4ScenarioState }) => {
   );
 };
 
+const guidedLabStorageKey = (id: DeviceBuildLabId) => `cli-rush-guided-lab-${id}-v1`;
+
+interface SavedGuidedLab {
+  state: DeviceBuildState;
+  lines: string[];
+  history: string[];
+  savedAt: number;
+}
+
+const GuidedBuildLab = ({ labId, onHome }: { labId: DeviceBuildLabId; onHome: () => void }) => {
+  const definition = getDeviceBuildDefinition(labId);
+  const [state, setState] = useState(() => createDeviceBuildState(labId));
+  const [input, setInput] = useState("");
+  const [lines, setLines] = useState<string[]>([]);
+  const [history, setHistory] = useState<string[]>([]);
+  const [historyAt, setHistoryAt] = useState(-1);
+  const [historyDraft, setHistoryDraft] = useState("");
+  const [hintLevel, setHintLevel] = useState<0 | 1 | 2>(0);
+  const [result, setResult] = useState<DeviceBuildResult | null>(null);
+  const [ready, setReady] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const logRef = useRef<HTMLDivElement>(null);
+  const lesson = getDeviceBuildStep(state);
+  const hint = hintLevel ? getDeviceBuildHint(state, hintLevel) : null;
+  const phases = ["access", "identity", "security", "services", "interfaces", "verification"] as const;
+  const activePhase = lesson?.phase ?? "verification";
+  const currentPhaseIndex = phases.indexOf(activePhase);
+
+  const openingLines = useCallback(() => [
+    `CLI RUSH // LAB ${definition.number} // ${definition.shortTitle.toUpperCase()}`,
+    "Isolated deterministic simulator · input is never sent to a device",
+    `BUILD PLAN // ${definition.summary}`,
+  ], [definition]);
+
+  useEffect(() => {
+    let restored = false;
+    try {
+      const raw = localStorage.getItem(guidedLabStorageKey(labId));
+      if (raw) {
+        const saved = JSON.parse(raw) as Partial<SavedGuidedLab>;
+        const safeState = restoreDeviceBuildState(saved.state);
+        if (safeState && Array.isArray(saved.lines) && saved.lines.every(line => typeof line === "string") && Array.isArray(saved.history) && saved.history.every(command => typeof command === "string")) {
+          setState(safeState);
+          setLines(saved.lines.slice(-160));
+          setHistory(saved.history.slice(-30));
+          restored = true;
+        }
+      }
+    } catch {}
+    if (!restored) setLines(openingLines());
+    setReady(true);
+  }, [labId, openingLines]);
+
+  useEffect(() => {
+    if (!ready) return;
+    try {
+      const saved: SavedGuidedLab = { state, lines: lines.slice(-160), history: history.slice(-30), savedAt: Date.now() };
+      localStorage.setItem(guidedLabStorageKey(labId), JSON.stringify(saved));
+    } catch {}
+  }, [history, labId, lines, ready, state]);
+
+  useEffect(() => {
+    logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
+  }, [lines]);
+
+  useEffect(() => {
+    if (!state.completed) setTimeout(() => {
+      const field = inputRef.current;
+      if (!field || !window.matchMedia("(min-width: 651px)").matches) return;
+      field.focus({ preventScroll: true });
+      field.setSelectionRange(field.value.length, field.value.length);
+    }, 0);
+  }, [state.stepIndex, state.completed]);
+
+  const restart = () => {
+    if (!window.confirm(`Restart Lab ${definition.number} from the first prompt? Its saved position will be replaced.`)) return;
+    const next = createDeviceBuildState(labId);
+    setState(next);
+    setInput("");
+    setHistory([]);
+    setHistoryAt(-1);
+    setHistoryDraft("");
+    setHintLevel(0);
+    setResult(null);
+    setLines(openingLines());
+  };
+
+  const focusAtEnd = () => setTimeout(() => {
+    const field = inputRef.current;
+    if (!field) return;
+    field.focus({ preventScroll: true });
+    field.setSelectionRange(field.value.length, field.value.length);
+  }, 0);
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (!lesson || !input.trim()) return;
+    const entered = input.trim();
+    const outcome = runDeviceBuildCommand(state, entered);
+    setResult(outcome);
+    setLines(values => [...values, `${deviceBuildPrompt(state)} ${entered}`, ...outcome.output, outcome.accepted ? "✓ Step accepted" : `% ${outcome.explanation}`].slice(-160));
+    setHistory(values => [...values, entered].slice(-30));
+    setHistoryAt(-1);
+    setHistoryDraft("");
+    setInput("");
+    if (outcome.accepted) {
+      setState(outcome.state);
+      setHintLevel(0);
+    } else focusAtEnd();
+  };
+
+  const complete = () => {
+    const completed = completeDeviceBuildInput(state, input);
+    setInput(completed);
+    setResult(null);
+    focusAtEnd();
+  };
+
+  const showHelp = () => {
+    setHintLevel(level => level === 0 ? 1 : level);
+    focusAtEnd();
+  };
+
+  const keys = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Tab" && !event.shiftKey) {
+      event.preventDefault();
+      complete();
+      return;
+    }
+    if (event.key === "?" || event.code === "Slash" && event.shiftKey) {
+      event.preventDefault();
+      showHelp();
+      return;
+    }
+    if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+      event.preventDefault();
+      const recalled = navigateCommandHistory(history, input, historyAt, historyDraft, event.key === "ArrowUp" ? "older" : "newer");
+      setInput(recalled.value);
+      setHistoryAt(recalled.index);
+      setHistoryDraft(recalled.draft);
+      focusAtEnd();
+    }
+  };
+
+  const changeInput = (value: string) => {
+    if (value.endsWith("?")) {
+      setInput(value.slice(0, -1));
+      showHelp();
+      return;
+    }
+    setInput(value);
+    setHistoryAt(-1);
+    setHistoryDraft(value);
+  };
+
+  const copySelection = () => {
+    const selection = window.getSelection();
+    if (!selection?.toString().trim() || !logRef.current || ![selection.anchorNode, selection.focusNode].every(node => node && logRef.current?.contains(node))) return;
+    void navigator.clipboard.writeText(selection.toString()).catch(() => {});
+  };
+
+  const pasteOnRightClick = async (event: ReactMouseEvent<HTMLInputElement>) => {
+    event.preventDefault();
+    try {
+      const text = (await navigator.clipboard.readText()).replace(/\s+/gu, " ").trim();
+      if (!text) return;
+      const field = event.currentTarget;
+      const start = field.selectionStart ?? field.value.length;
+      const end = field.selectionEnd ?? field.value.length;
+      const next = `${field.value.slice(0, start)}${text}${field.value.slice(end)}`.slice(0, 256);
+      setInput(next);
+      setHistoryAt(-1);
+      setHistoryDraft(next);
+      focusAtEnd();
+    } catch {
+      setResult({ accepted: false, state, output: [], explanation: "Clipboard permission was blocked. Use Ctrl+V or allow clipboard access and right-click again.", useCase: "Pasted text remains inert inside the simulator.", verification: "Check the prompt before submitting.", rollback: "No simulated state changed.", errorCode: "WRONG_COMMAND" });
+    }
+  };
+
+  return (
+    <section className="game guided-build">
+      <div className="game-top">
+        <span>LAB {definition.number}<br /><b>{definition.shortTitle.toUpperCase()}</b></span>
+        <div className="clock"><small>STEPS COMPLETED</small><b>{state.stepIndex}/{definition.steps.length}</b></div>
+        <div className="metrics"><span>CLI MODE<b>{state.mode.toUpperCase()}</b></span><span>STATE<b>{state.completed ? "SAVED" : "ACTIVE"}</b></span></div>
+      </div>
+      <div className="lab-phase-map" aria-label={`Build phase: ${activePhase}`}>
+        {phases.map((phase, index) => <span key={phase} className={index < currentPhaseIndex || state.completed ? "complete" : index === currentPhaseIndex ? "active" : ""}><i>{index < currentPhaseIndex || state.completed ? "✓" : index + 1}</i>{phase}</span>)}
+      </div>
+
+      <div className="objective guided-objective">
+        <p>{definition.deviceType.toUpperCase()} BUILD · FROM DEFAULTS · EXPLAINED STEP BY STEP</p>
+        <small>{state.completed ? "LAB COMPLETE" : `${lesson?.phase.toUpperCase()} · STEP ${state.stepIndex + 1} OF ${definition.steps.length}`}</small>
+        <h1>{state.completed ? `${definition.title} is complete.` : lesson?.objective}</h1>
+        <div className="guided-context">
+          <span><small>WHY THIS STEP EXISTS</small>{state.completed ? "The verified running configuration has been copied to startup configuration." : lesson?.why}</span>
+          <span><small>PROMPT LOCATION</small><code>{deviceBuildPrompt(state)}</code></span>
+        </div>
+      </div>
+
+      {!state.completed && <section className="scenario-hint guided-hint" aria-live="polite">
+        <div>
+          <small>FIELD ENGINEER COACH · PROGRESSIVE HELP</small>
+          <strong>{hint?.heading ?? "Not sure what comes next?"}</strong>
+          <p>{hint?.explanation ?? "Ask for a reasoning hint first. The worked command is a second, deliberate reveal so you can still attempt recall."}</p>
+          {hint?.example && <code>{deviceBuildPrompt(state)} {hint.example}</code>}
+        </div>
+        {hintLevel === 0 ? <button className="secondary" type="button" onClick={() => setHintLevel(1)}>Give me a hint</button>
+          : hintLevel === 1 ? <button className="secondary" type="button" onClick={() => setHintLevel(2)}>Show worked command</button>
+          : <span className="hint-complete">Worked command shown · type it at the prompt</span>}
+      </section>}
+
+      <div className="terminal guided-terminal">
+        <div className="terminal-head"><span>● ● ● &nbsp; {state.hostname}{" // CONSOLE // ISOLATED SIMULATOR"}</span><div className="terminal-head-actions"><button onClick={restart}>Restart lab</button><button onClick={onHome}>Leave lab</button></div></div>
+        <div className="log" ref={logRef} role="log" onMouseUp={copySelection} title="Highlight to copy">{lines.map((line, index) => <div key={`${index}-${line}`}>{line}</div>)}</div>
+        {state.completed ? <div className="scenario-complete-action"><button className="primary small" onClick={onHome}>Return to Labs</button></div> : <form onSubmit={submit}>
+          <label className="sr" htmlFor="guided-command">Command for the current guided lab objective</label>
+          <span>{deviceBuildPrompt(state)}</span>
+          <input id="guided-command" ref={inputRef} value={input} onChange={event => changeInput(event.target.value)} onKeyDown={keys} onContextMenu={event => void pasteOnRightClick(event)} aria-keyshortcuts="Tab ? ArrowUp ArrowDown Enter" autoComplete="off" autoCorrect="off" spellCheck={false} maxLength={256} />
+          <button className="cli-assist" type="button" onClick={complete}>Tab</button>
+          <button className="cli-assist" type="button" onClick={showHelp}>?</button>
+          <button type="submit">Run</button>
+        </form>}
+      </div>
+
+      {result && <section className={`scenario-lesson ${result.accepted ? "accepted" : "rejected"}`} aria-live="polite">
+        <div><small>{result.accepted ? "WHY IT WORKED" : "WHY IT DID NOT WORK"}</small><p>{result.explanation}</p></div>
+        <div><small>REAL USE</small><p>{result.useCase}</p></div>
+        <div><small>VERIFY</small><p>{result.verification}</p></div>
+        <div><small>ROLLBACK</small><p>{result.rollback}</p></div>
+      </section>}
+      <p className="help">Autosaved locally · IOS keywords ignore capitalisation; secrets do not · Tab completes a typed prefix · ? opens help · Up/Down recalls history · Highlight to copy</p>
+    </section>
+  );
+};
+
 export default function GameClient() {
   const [screen, setScreen] = useState<Screen>("home");
   const [progress, setProgress] = useState<Progress>(blankProgress);
@@ -395,8 +641,9 @@ export default function GameClient() {
   const [scenarioHistoryDraft, setScenarioHistoryDraft] = useState("");
   const [scenarioSessionAvailable, setScenarioSessionAvailable] = useState(false);
   const [scenarioPersistenceReady, setScenarioPersistenceReady] = useState(false);
-  const [scenarioSavedAt, setScenarioSavedAt] = useState<number | null>(null);
+  const [, setScenarioSavedAt] = useState<number | null>(null);
   const [scenarioHintLevel, setScenarioHintLevel] = useState<0 | 1 | 2>(0);
+  const [activeGuidedLab, setActiveGuidedLab] = useState<DeviceBuildLabId>("router-foundation");
 
   const progressRef = useRef(progress);
   const roundRef = useRef(round);
@@ -484,7 +731,6 @@ export default function GameClient() {
   );
   const learningHints = useMemo(() => learningHintsFor(item), [item]);
   const currentTeaching = useMemo(() => teachingFor(item), [item]);
-  const validationSummary = useMemo(() => catalogueValidationSummary(catalogue), [catalogue]);
   const scenarioChoices = useMemo(() => getIpv4ScenarioChoices(scenario), [scenario]);
   const scenarioCliCatalogue = useMemo(() => scenarioAssistanceCatalogue(scenario), [scenario]);
   const scenarioHint = useMemo(
@@ -2042,31 +2288,25 @@ export default function GameClient() {
               }}>{nextChapterState ? `Learn ${nextChapterState.chapter.commandIds.length} commands` : "Run adaptive Easy practice"}</button>
             </article>
 
-            <article className="dashboard-card lab-card">
-              <small>STATEFUL IPV4 LAB · NO CLOCK</small>
-              <h2>Bring up, diagnose and roll back a branch interface</h2>
-              <p>Start at <code>R1&gt;</code>, navigate every mode yourself, configure addressing, interpret interface and route output, repair a seeded reachability fault, save and then verify a complete rollback.</p>
-              {scenarioSessionAvailable ? (
-                <>
-                  <span className="dashboard-status">Saved at step {scenario.acceptedActions} · {scenario.phase === "complete" ? "lab complete" : getIpv4ScenarioObjective(scenario)}</span>
-                  <div className="lab-card-actions">
-                    <button className="primary small" onClick={resumeIpv4Lab}>{scenario.phase === "complete" ? "View completed lab" : "Resume IPv4 field lab"}</button>
-                    <button className="secondary small" onClick={restartIpv4Lab}>Restart lab</button>
-                  </div>
-                  {scenarioSavedAt && <small className="saved-lab-note">AUTOSAVED LOCALLY</small>}
-                </>
-              ) : <button className="primary small" onClick={startIpv4Lab}>Start IPv4 field lab</button>}
-            </article>
-
-            <article className="dashboard-card validation-card">
-              <small>CONTENT TRUST · DERIVED STATUS</small>
-              <h2>{validationSummary.documentationChecked}/{validationSummary.total} syntax items cross-checked</h2>
-              <p>All {validationSummary.targetAssigned} built-in objectives are assigned to named CML targets. {validationSummary.imageVerified} are currently marked verified on a licensed image, so the pack remains a simulator-tested draft rather than claiming review it has not received.</p>
-              <details>
-                <summary>Named validation targets</summary>
-                <ul>{namedLabTargets.map((target) => <li key={target.id}><a href={target.sourceUrl} target="_blank" rel="noreferrer">{target.label}</a></li>)}</ul>
-              </details>
-            </article>
+            <section className="labs-library" aria-labelledby="labs-title">
+              <div className="labs-library-head">
+                <span><small>PRACTICAL LEARNING</small><h2 id="labs-title">Labs</h2></span>
+                <p>Untimed, stateful builds with progressive hints. Each lab saves its exact position locally and includes its own restart control.</p>
+              </div>
+              <ol className="lab-list">
+                <li className="dashboard-card lab-card">
+                  <span className="lab-number">01</span>
+                  <div><small>STATEFUL IPV4 TROUBLESHOOTING</small><h3>Bring up, diagnose and roll back a branch interface</h3><p>Use short <code>fa</code>, <code>gi</code> or <code>te</code> interfaces and simple private addresses. Configure, interpret output, repair a gateway of last resort, verify, save and roll back.</p></div>
+                  <div className="lab-list-actions">{scenarioSessionAvailable ? <><span>Saved at step {scenario.acceptedActions}</span><button className="primary small" onClick={resumeIpv4Lab}>{scenario.phase === "complete" ? "View completed lab" : "Resume Lab 1"}</button><button className="secondary small" onClick={restartIpv4Lab}>Restart</button></> : <button className="primary small" onClick={startIpv4Lab}>Start Lab 1</button>}</div>
+                </li>
+                {deviceBuildLabs.map(lab => <li className="dashboard-card lab-card" key={lab.id}>
+                  <span className="lab-number">{String(lab.number).padStart(2, "0")}</span>
+                  <div><small>{lab.deviceType.toUpperCase()} FOUNDATION · FROM DEFAULTS</small><h3>{lab.title}</h3><p>{lab.summary}</p></div>
+                  <div className="lab-list-actions"><span>Autosaves and resumes</span><button className="primary small" onClick={() => { setActiveGuidedLab(lab.id); setScreen("guided-lab"); }}>Open Lab {lab.number}</button></div>
+                </li>)}
+              </ol>
+              <p className="case-note"><b>IOS capitalisation:</b> command keywords such as <code>vlan 20</code>, <code>Vlan 20</code> and <code>VLAN 20</code> are equivalent. Passwords and shared secrets remain case-sensitive.</p>
+            </section>
           </section>
         </section>
       )}
@@ -2274,6 +2514,9 @@ export default function GameClient() {
                 <strong>{scenarioHint?.heading ?? "Stuck on the next step?"}</strong>
                 <p>{scenarioHint?.explanation ?? "Start with a reasoning hint. If that is not enough, reveal a worked command using the exact values from this saved work order."}</p>
                 {scenarioHint?.example && <code>{ipv4ScenarioPrompt(scenario)} {scenarioHint.example}</code>}
+                {scenarioHint?.breakdown && <div className="command-breakdown" aria-label="Command anatomy">
+                  {scenarioHint.breakdown.map((part, index) => <span key={`${part.token}-${index}`}><code>{part.token}</code><small>{part.meaning}</small></span>)}
+                </div>}
               </div>
               {scenarioHintLevel < 2
                 ? <button className="secondary" type="button" onClick={() => setScenarioHintLevel((level) => level === 0 ? 1 : 2)}>{scenarioHintLevel === 0 ? "Give me a hint" : "Show worked command"}</button>
@@ -2374,6 +2617,8 @@ export default function GameClient() {
           </div>
         </section>
       )}
+
+      {screen === "guided-lab" && <GuidedBuildLab key={activeGuidedLab} labId={activeGuidedLab} onHome={goHome} />}
 
       {screen === "report" && report && (
         <section className={`report report-${report.mode}`}>
@@ -2480,7 +2725,7 @@ export default function GameClient() {
         </section>
       )}
 
-      {screen !== "round" && screen !== "scenario" && (
+      {screen !== "round" && screen !== "scenario" && screen !== "guided-lab" && (
         <footer>
           <span>Independent educational simulator · Not affiliated with or endorsed by Cisco</span>
           <span>IOS XE learning pack v0.1 · Simulator-tested draft</span>
