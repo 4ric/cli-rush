@@ -30,21 +30,6 @@ services:
     tmpfs:
       - /tmp:size=32m,noexec,nosuid,nodev
 
-  init-storage:
-    image: alpine:3.22
-    profiles: ["setup"]
-    command: ["sh", "-c", "test -f /secrets/password_hash && test -f /secrets/session_secret && chmod 0400 /secrets/password_hash /secrets/session_secret && chown 1000:1000 /secrets/password_hash /secrets/session_secret && chown -R 1000:1000 /data"]
-    volumes:
-      - ./data:/data
-      - ./secrets:/secrets
-    network_mode: none
-    cap_drop:
-      - ALL
-    cap_add:
-      - CHOWN
-    security_opt:
-      - no-new-privileges:true
-
   init-secrets:
     image: node:24-alpine
     profiles: ["setup"]

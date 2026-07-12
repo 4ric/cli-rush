@@ -15,9 +15,7 @@ test("Compose keeps the service private, persistent and hardened", async () => {
   assert.match(compose, /CLI_RUSH_PUBLIC_ORIGIN: \$\{CLI_RUSH_PUBLIC_ORIGIN:\?/u);
   assert.match(compose, /CLI_RUSH_PASSWORD_HASH_FILE: \/run\/secrets\/password_hash/u);
   assert.match(compose, /profiles: \["setup"\]/u);
-  assert.match(compose, /chmod 0400 \/secrets\/password_hash \/secrets\/session_secret/u);
-  assert.match(compose, /chown 1000:1000 \/secrets\/password_hash \/secrets\/session_secret/u);
-  assert.match(compose, /\.\/secrets:\/secrets/u);
+  assert.doesNotMatch(compose, /init-storage:/u);
 });
 
 test("Docker image has a pruned non-root runtime and health check", async () => {
@@ -29,9 +27,12 @@ test("Docker image has a pruned non-root runtime and health check", async () => 
   assert.doesNotMatch(dockerfile, /COPY .*secrets|CLI_RUSH_SESSION_SECRET=/u);
 });
 
-test("setup creates secrets before applying runtime ownership", async () => {
+test("setup creates secrets before applying host-side runtime ownership", async () => {
   const setup = await read("scripts/docker-setup.sh");
-  assert.ok(setup.indexOf("run --rm init-secrets") < setup.indexOf("run --rm init-storage"));
+  assert.ok(setup.indexOf("init-secrets") < setup.indexOf("chown 1000:1000 secrets/password_hash"));
+  assert.match(setup, /chown -R 1000:1000 data/u);
+  assert.match(setup, /chmod 0400 secrets\/password_hash secrets\/session_secret/u);
+  assert.doesNotMatch(setup, /init-storage/u);
 });
 
 test("deployment package retains Sites identity but excludes removed starter database code", async () => {

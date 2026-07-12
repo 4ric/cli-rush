@@ -18,6 +18,8 @@ cd cli-rush
 sh scripts/docker-setup.sh
 ```
 
+The setup script creates the login secrets, then applies the host-side ownership required by the non-root application container. Run it as `root`, or from an account with `sudo`; changing ownership from a helper container is not reliable on every bind-mounted filesystem.
+
 Edit `.env` before starting the service:
 
 ```dotenv
