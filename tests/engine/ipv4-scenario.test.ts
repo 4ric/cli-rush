@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   createIpv4Scenario,
+  getIpv4ScenarioHint,
   getIpv4ScenarioChoices,
   getIpv4ScenarioObjective,
   ipv4ScenarioPrompt,
   runIpv4ScenarioCommand,
+  restoreIpv4ScenarioState,
   submitIpv4ScenarioInterpretation,
   type Ipv4ScenarioChoiceId,
   type Ipv4ScenarioState,
@@ -19,6 +21,7 @@ const command = (state: Ipv4ScenarioState, input: string) => {
   assert.ok(result.useCase.length > 20);
   assert.ok(result.verification.length > 20);
   assert.ok(result.rollback.length > 20);
+  assert.ok((result.example?.length ?? 0) > 20);
   assert.ok(result.nextObjective.length > 20);
   return result;
 };
@@ -50,6 +53,35 @@ test("scenario parameters and seeded fault are deterministic and start at R1>", 
   assert.equal(first.phase, "gain-privilege");
   assert.match(getIpv4ScenarioObjective(first), /privileged EXEC/i);
   assert.notDeepEqual(createIpv4Scenario(74).parameters, first.parameters);
+});
+
+test("progressive hints teach reasoning before showing the seeded command", () => {
+  const state = createIpv4Scenario(73);
+  const reasoning = getIpv4ScenarioHint(state, 1);
+  assert.equal(reasoning.example, null);
+  assert.match(reasoning.explanation, /prompt|location|context/iu);
+
+  const worked = getIpv4ScenarioHint(state, 2);
+  assert.equal(worked.example, "enable");
+  assert.match(worked.explanation, /worked|complete command/iu);
+
+  const interpretationState = { ...reachConfiguredInterface(73), phase: "interpret-interface" as const };
+  const interpretation = getIpv4ScenarioHint(interpretationState, 2);
+  assert.equal(interpretation.example, null);
+  assert.match(interpretation.explanation, /Status|Protocol/iu);
+});
+
+test("saved IPv4 lab state restores safely and rejects catalogue drift", () => {
+  const configured = reachConfiguredInterface(31);
+  assert.deepEqual(restoreIpv4ScenarioState(JSON.parse(JSON.stringify(configured))), configured);
+
+  const tamperedAddress = JSON.parse(JSON.stringify(configured));
+  tamperedAddress.parameters.localAddress = "10.0.0.1";
+  assert.equal(restoreIpv4ScenarioState(tamperedAddress), null);
+
+  const tamperedInterface = JSON.parse(JSON.stringify(configured));
+  tamperedInterface.interfaceState.address = "10.0.0.1";
+  assert.equal(restoreIpv4ScenarioState(tamperedInterface), null);
 });
 
 test("full lab configures, diagnoses, verifies, saves and rolls back", () => {

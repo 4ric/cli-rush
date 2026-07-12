@@ -24,6 +24,8 @@ test("teaching distinguishes purpose, verification, traps and rollback", () => {
   assert.match(teaching.verify, /show ip interface brief/iu);
   assert.match(teaching.commonTrap, /mask|shut|peer/iu);
   assert.match(teaching.rollback, /no|default/iu);
+  assert.match(teaching.mentalModel, /configuration|administrative|operational/iu);
+  assert.match(teaching.workedExample, new RegExp(address.canonical.replaceAll(".", "\\."), "iu"));
 });
 
 test("pre-answer-safe explanations do not depend on teaching literals", () => {

@@ -43,6 +43,15 @@ export interface DailyRecallOptions {
 }
 
 export const DEFAULT_SESSION_SIZE = 20;
+
+export const easyPracticeCatalogue = (
+  catalogue: readonly Command[],
+  currentChapterIds: readonly string[],
+): Command[] => {
+  const chapterIds = new Set(currentChapterIds);
+  const outsideChapter = catalogue.filter((command) => !chapterIds.has(command.id));
+  return outsideChapter.length ? outsideChapter : [...catalogue];
+};
 export const DEFAULT_DAILY_RECALL_SIZE = 10;
 export const DEFAULT_QUEUE_MIX: QueueMix = {
   priority: 0.6,

@@ -48,6 +48,7 @@ import {
 } from "@/lib/cli-assistance.ts";
 import {
   buildDailyRecallSession,
+  easyPracticeCatalogue,
   weightedCommandQueue,
 } from "@/lib/command-queue.ts";
 import {
@@ -79,9 +80,11 @@ import {
 } from "@/lib/platform-validation.ts";
 import {
   createIpv4Scenario,
+  getIpv4ScenarioHint,
   getIpv4ScenarioChoices,
   getIpv4ScenarioObjective,
   ipv4ScenarioPrompt,
+  restoreIpv4ScenarioState,
   runIpv4ScenarioCommand,
   submitIpv4ScenarioInterpretation,
   type Ipv4ScenarioActionResult,
@@ -155,8 +158,18 @@ interface TimeChange {
   deltaMs: number;
 }
 
+interface SavedScenarioSession {
+  version: 1;
+  state: Ipv4ScenarioState;
+  lines: string[];
+  history: string[];
+  input: string;
+  savedAt: number;
+}
+
 const storageKey = "cli-rush-progress-v1";
 const customStorageKey = "cli-rush-custom-commands-v1";
+const scenarioStorageKey = "cli-rush-ipv4-scenario-v1";
 
 const blankProgress = (): Progress => ({
   bestScore: null,
@@ -326,6 +339,44 @@ const modeSummary = (rules: GameModeRules): string => {
 const startLabel = (mode: GameModeId): string =>
   mode === "easy" ? "Start Easy practice" : `Start ${gameModeById(mode).label} rush`;
 
+const CliModeMap = ({ mode }: { mode: CliMode }) => {
+  const stages: Array<{ id: string; label: string; prompt: string; modes: CliMode[] }> = [
+    { id: "user", label: "User EXEC", prompt: "R1>", modes: ["user"] },
+    { id: "privileged", label: "Privileged EXEC", prompt: "R1#", modes: ["privileged"] },
+    { id: "global", label: "Global config", prompt: "R1(config)#", modes: ["global"] },
+    { id: "feature", label: "Feature scope", prompt: "R1(config-*)#", modes: ["interface", "router", "line", "vlan", "acl", "dhcp"] },
+  ];
+  return (
+    <div className="cli-mode-map" aria-label={`CLI mode map; current mode is ${modeNames[mode]}`}>
+      {stages.map((stage, index) => (
+        <div className="mode-map-stage" key={stage.id}>
+          {index > 0 && <i aria-hidden="true">→</i>}
+          <span className={stage.modes.includes(mode) ? "active" : ""}>
+            <small>{stage.label}</small><code>{stage.prompt}</code>
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+const ScenarioTopology = ({ state }: { state: Ipv4ScenarioState }) => {
+  const interfaceReady = state.interfaceState.adminUp && state.interfaceState.address !== null;
+  const routeReady = state.defaultRoute === state.parameters.gateway;
+  const routeWrong = state.defaultRoute !== null && !routeReady;
+  return (
+    <div className="scenario-topology" aria-label="Live branch IPv4 path">
+      <span className="topology-node"><small>BRANCH LAN</small><b>{state.parameters.networkAddress}/{state.parameters.prefixLength}</b></span>
+      <i className={interfaceReady ? "ready" : "pending"} aria-hidden="true">⇄</i>
+      <span className={`topology-node router ${interfaceReady ? "ready" : "pending"}`}><small>R1 · {state.parameters.interfaceName}</small><b>{state.interfaceState.address ?? "unassigned"}</b></span>
+      <i className={routeReady ? "ready" : routeWrong ? "fault" : "pending"} aria-hidden="true">⇢</i>
+      <span className={`topology-node ${routeReady ? "ready" : routeWrong ? "fault" : "pending"}`}><small>UPSTREAM GATEWAY</small><b>{state.defaultRoute ?? "not set"}</b></span>
+      <i className={routeReady && interfaceReady ? "ready" : "pending"} aria-hidden="true">⇢</i>
+      <span className={`topology-node ${routeReady && interfaceReady ? "ready" : "pending"}`}><small>REMOTE TEST</small><b>{state.parameters.remoteTarget}</b></span>
+    </div>
+  );
+};
+
 export default function GameClient() {
   const [screen, setScreen] = useState<Screen>("home");
   const [progress, setProgress] = useState<Progress>(blankProgress);
@@ -342,6 +393,10 @@ export default function GameClient() {
   const [scenarioHistory, setScenarioHistory] = useState<string[]>([]);
   const [scenarioHistoryAt, setScenarioHistoryAt] = useState(-1);
   const [scenarioHistoryDraft, setScenarioHistoryDraft] = useState("");
+  const [scenarioSessionAvailable, setScenarioSessionAvailable] = useState(false);
+  const [scenarioPersistenceReady, setScenarioPersistenceReady] = useState(false);
+  const [scenarioSavedAt, setScenarioSavedAt] = useState<number | null>(null);
+  const [scenarioHintLevel, setScenarioHintLevel] = useState<0 | 1 | 2>(0);
 
   const progressRef = useRef(progress);
   const roundRef = useRef(round);
@@ -432,6 +487,10 @@ export default function GameClient() {
   const validationSummary = useMemo(() => catalogueValidationSummary(catalogue), [catalogue]);
   const scenarioChoices = useMemo(() => getIpv4ScenarioChoices(scenario), [scenario]);
   const scenarioCliCatalogue = useMemo(() => scenarioAssistanceCatalogue(scenario), [scenario]);
+  const scenarioHint = useMemo(
+    () => scenarioHintLevel === 0 ? null : getIpv4ScenarioHint(scenario, scenarioHintLevel),
+    [scenario, scenarioHintLevel],
+  );
   const activeRules = gameModeById(activeMode);
   const selectedRules = gameModeById(selectedMode);
   const timed = time !== null;
@@ -464,6 +523,29 @@ export default function GameClient() {
         if (Array.isArray(parsed)) setCustomCommands(parsed);
       }
     } catch {}
+
+    try {
+      const scenarioRaw = localStorage.getItem(scenarioStorageKey);
+      if (scenarioRaw) {
+        const saved = JSON.parse(scenarioRaw) as Partial<SavedScenarioSession>;
+        const restored = saved.version === 1 ? restoreIpv4ScenarioState(saved.state) : null;
+        if (restored) {
+          const restoredLines = Array.isArray(saved.lines)
+            ? saved.lines.filter((line): line is string => typeof line === "string").map((line) => line.slice(0, 500)).slice(-120)
+            : [];
+          const restoredHistory = Array.isArray(saved.history)
+            ? saved.history.filter((entry): entry is string => typeof entry === "string").map((entry) => entry.slice(0, 256)).slice(-20)
+            : [];
+          setScenario(restored);
+          setScenarioLines(restoredLines.length ? restoredLines : ["CLI RUSH // IPV4 FIELD LAB // RESTORED SESSION"]);
+          setScenarioHistory(restoredHistory);
+          setScenarioInput(typeof saved.input === "string" ? saved.input.slice(0, 256) : "");
+          setScenarioSessionAvailable(true);
+          setScenarioSavedAt(typeof saved.savedAt === "number" ? saved.savedAt : null);
+        }
+      }
+    } catch {}
+    setScenarioPersistenceReady(true);
 
     void (async () => {
       try {
@@ -540,6 +622,40 @@ export default function GameClient() {
   useEffect(() => {
     scenarioLogRef.current?.scrollTo({ top: scenarioLogRef.current.scrollHeight });
   }, [scenarioLines]);
+
+  useEffect(() => {
+    if (!scenarioPersistenceReady || !scenarioSessionAvailable) return;
+    const id = setTimeout(() => {
+      const savedAt = Date.now();
+      const session: SavedScenarioSession = {
+        version: 1,
+        state: scenario,
+        lines: scenarioLines.slice(-120),
+        history: scenarioHistory.slice(-20),
+        input: scenarioInput.slice(0, 256),
+        savedAt,
+      };
+      try {
+        localStorage.setItem(scenarioStorageKey, JSON.stringify(session));
+        setScenarioSavedAt(savedAt);
+      } catch {}
+    }, 120);
+    return () => clearTimeout(id);
+  }, [scenario, scenarioHistory, scenarioInput, scenarioLines, scenarioPersistenceReady, scenarioSessionAvailable]);
+
+  useEffect(() => {
+    setScenarioHintLevel(0);
+  }, [scenario.phase]);
+
+  useEffect(() => {
+    if (screen !== "round" || paused || advancing) return;
+    const id = requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      const end = inputRef.current?.value.length ?? 0;
+      inputRef.current?.setSelectionRange(end, end);
+    });
+    return () => cancelAnimationFrame(id);
+  }, [advancing, cursor, paused, screen]);
 
   useEffect(() => {
     if (screen === "scenario" && scenarioChoices.length === 0) {
@@ -1030,10 +1146,23 @@ export default function GameClient() {
     launchRound("easy", "practice", nextQueue);
   };
 
+  const startEasyPractice = () => {
+    const currentProgress = progressRef.current;
+    const pool = easyPracticeCatalogue(catalogue, nextChapterState?.chapter.commandIds ?? []);
+    const nextQueue = weightedCommandQueue(
+      pool,
+      currentProgress.commands,
+      currentProgress.lastFirstCommandId,
+      secureRandom,
+      { limit: Math.min(10, pool.length) },
+    );
+    launchRound("easy", "practice", nextQueue);
+  };
+
   const start = () => {
     const mode = selectedMode;
     if (mode === "easy") {
-      startBeginnerPath();
+      startEasyPractice();
       return;
     }
     const currentProgress = progressRef.current;
@@ -1067,6 +1196,9 @@ export default function GameClient() {
     setScenarioHistory([]);
     setScenarioHistoryAt(-1);
     setScenarioHistoryDraft("");
+    setScenarioSessionAvailable(true);
+    setScenarioSavedAt(Date.now());
+    setScenarioHintLevel(0);
     setScenarioLesson(null);
     setScenarioLines([
       "CLI RUSH // IPV4 FIELD LAB",
@@ -1076,11 +1208,33 @@ export default function GameClient() {
     setScreen("scenario");
   };
 
+  const resumeIpv4Lab = () => {
+    setScenarioHintLevel(0);
+    setScreen(scenario.phase === "complete" ? "scenario-report" : "scenario");
+  };
+
+  const restartIpv4Lab = () => {
+    if (!window.confirm("Restart the IPv4 lab with a new seeded work order? The saved lab position will be replaced.")) return;
+    startIpv4Lab();
+  };
+
+  const goHome = () => {
+    if (advanceTimer.current) clearTimeout(advanceTimer.current);
+    if (timeChangeTimer.current) clearTimeout(timeChangeTimer.current);
+    finishing.current = false;
+    pausedAt.current = null;
+    setPaused(false);
+    setAdvancing(false);
+    setTimeChange(null);
+    setScreen("home");
+  };
+
   const recordScenarioResult = (
     result: Ipv4ScenarioActionResult,
     entryLabel: string,
   ) => {
     setScenario(result.state);
+    setScenarioSessionAvailable(true);
     setScenarioLesson(result);
     setScenarioLines((values) => [
       ...values,
@@ -1774,10 +1928,10 @@ export default function GameClient() {
     <main className={`shell screen-${screen} ${progress.reducedMotion ? "reduced" : ""}`}>
       <div className="grid-bg" />
       <header>
-        <div className="brand">
+        <button className="brand brand-link" type="button" onClick={goHome} aria-label="Return to CLI RUSH home">
           <b>CR</b>
           <span><strong>CLI RUSH</strong><small>Network Command Arena</small></span>
-        </div>
+        </button>
         <div className="controls">
           <span className="saved">● {serverBacked ? "Docker data active" : "Saved locally"}</span>
           {screen !== "round" && (
@@ -1892,7 +2046,16 @@ export default function GameClient() {
               <small>STATEFUL IPV4 LAB · NO CLOCK</small>
               <h2>Bring up, diagnose and roll back a branch interface</h2>
               <p>Start at <code>R1&gt;</code>, navigate every mode yourself, configure addressing, interpret interface and route output, repair a seeded reachability fault, save and then verify a complete rollback.</p>
-              <button className="primary small" onClick={startIpv4Lab}>Start IPv4 field lab</button>
+              {scenarioSessionAvailable ? (
+                <>
+                  <span className="dashboard-status">Saved at step {scenario.acceptedActions} · {scenario.phase === "complete" ? "lab complete" : getIpv4ScenarioObjective(scenario)}</span>
+                  <div className="lab-card-actions">
+                    <button className="primary small" onClick={resumeIpv4Lab}>{scenario.phase === "complete" ? "View completed lab" : "Resume IPv4 field lab"}</button>
+                    <button className="secondary small" onClick={restartIpv4Lab}>Restart lab</button>
+                  </div>
+                  {scenarioSavedAt && <small className="saved-lab-note">AUTOSAVED LOCALLY</small>}
+                </>
+              ) : <button className="primary small" onClick={startIpv4Lab}>Start IPv4 field lab</button>}
             </article>
 
             <article className="dashboard-card validation-card">
@@ -1962,8 +2125,13 @@ export default function GameClient() {
                 {assistance >= 3 && !easyComplete && (
                   <code ref={learningAidRef} tabIndex={-1} className="revealed" aria-label="Revealed command">{learningHints.reveal.text}</code>
                 )}
+                {item.topic === "CLI navigation" && <CliModeMap mode={device.mode} />}
                 {easyComplete && (
                   <div className="teaching-card">
+                    <div><small>WHY IT MATTERS</small><p>{currentTeaching.purpose}</p></div>
+                    <div><small>WHEN TO USE IT</small><p>{currentTeaching.whenToUse}</p></div>
+                    <div><small>MENTAL MODEL</small><p>{currentTeaching.mentalModel}</p></div>
+                    <div><small>WORKED EXAMPLE</small><p>{currentTeaching.workedExample}</p></div>
                     <div><small>SYNTAX</small><code>{currentTeaching.syntax}</code></div>
                     <div><small>EXPECTED</small><p>{currentTeaching.expected}</p></div>
                     <div><small>VERIFY</small><p>{currentTeaching.verify}</p></div>
@@ -1991,11 +2159,29 @@ export default function GameClient() {
             </section>
           )}
 
+          {activeMode !== "easy" && !paused && (
+            <section className={`timed-nudge assisted-${assistance}`} aria-label="Timed mode hint" aria-live="polite">
+              <div>
+                <small>STUCK? · HINTS DO NOT CHANGE THE CLOCK</small>
+                <strong>{assistance === 0 ? "Use a progressive nudge without revealing the answer" : assistance === 1 ? "Translate the objective into command structure" : "Use the command family, then supply the task values"}</strong>
+                {assistance >= 1 && <code>{learningHints.structure.text}</code>}
+                {assistance >= 2 && <code>{learningHints.family.text}</code>}
+              </div>
+              {assistance === 0
+                ? <button className="secondary" onClick={() => showAssistance(1)}>Give me a hint</button>
+                : assistance === 1
+                  ? <button className="secondary" onClick={() => showAssistance(2)}>Show command family</button>
+                  : <span>Assisted Field CLI · clean mastery disabled</span>}
+            </section>
+          )}
+
           <div className="terminal">
             <div className="terminal-head">
               <span>● ● ● &nbsp; {device.hostname}{" // "}CONSOLE</span>
               {activeMode === "easy"
-                ? <button onClick={() => finish("partial")}>{sessionKind === "daily" ? "Pause recall" : sessionKind === "chapter" ? "Pause chapter" : "Finish practice"}</button>
+                ? sessionKind === "practice"
+                  ? <button onClick={() => finish("partial")}>Finish practice</button>
+                  : <button onClick={goHome}>{sessionKind === "daily" ? "Back to home" : "Back to learning path"}</button>
                 : <button onClick={pauseRound} disabled={paused || advancing}>Pause</button>}
             </div>
             {paused ? (
@@ -2078,12 +2264,30 @@ export default function GameClient() {
               <span>GATEWAY <b>{scenario.parameters.gateway}</b></span>
               <span>TEST TARGET <b>{scenario.parameters.remoteTarget}</b></span>
             </div>
+            <ScenarioTopology state={scenario} />
           </div>
+
+          {scenario.phase !== "complete" && (
+            <section className={`scenario-hint ${scenarioHint ? `focus-${scenarioHint.visualFocus}` : ""}`} aria-live="polite">
+              <div>
+                <small>FIELD ENGINEER COACH · PROGRESSIVE HELP</small>
+                <strong>{scenarioHint?.heading ?? "Stuck on the next step?"}</strong>
+                <p>{scenarioHint?.explanation ?? "Start with a reasoning hint. If that is not enough, reveal a worked command using the exact values from this saved work order."}</p>
+                {scenarioHint?.example && <code>{ipv4ScenarioPrompt(scenario)} {scenarioHint.example}</code>}
+              </div>
+              {scenarioHintLevel < 2
+                ? <button className="secondary" type="button" onClick={() => setScenarioHintLevel((level) => level === 0 ? 1 : 2)}>{scenarioHintLevel === 0 ? "Give me a hint" : "Show worked command"}</button>
+                : <span className="hint-complete">Worked command shown · try it at the prompt</span>}
+            </section>
+          )}
 
           <div className="terminal scenario-terminal">
             <div className="terminal-head">
               <span>● ● ● &nbsp; R1 // CONSOLE // ISOLATED SIMULATOR</span>
-              <button onClick={() => setScreen("home")}>Leave lab</button>
+              <div className="terminal-head-actions">
+                <button onClick={restartIpv4Lab}>Restart lab</button>
+                <button onClick={goHome}>Leave lab</button>
+              </div>
             </div>
             <div
               className="log"
@@ -2141,6 +2345,7 @@ export default function GameClient() {
               <div><small>REAL USE</small><p>{scenarioLesson.useCase}</p></div>
               <div><small>VERIFY</small><p>{scenarioLesson.verification}</p></div>
               <div><small>ROLLBACK</small><p>{scenarioLesson.rollback}</p></div>
+              {scenarioLesson.example && <div className="lesson-example"><small>WORKED EXAMPLE</small><code>{scenarioLesson.example}</code></div>}
             </section>
           )}
           <p className="help">Manual prompts · Up/Down recalls commands · Output must be interpreted · Highlight to copy · Right-click or Ctrl+V pastes · Input never leaves the simulator</p>

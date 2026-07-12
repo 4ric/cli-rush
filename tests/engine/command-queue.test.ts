@@ -5,6 +5,7 @@ import {
   buildDailyRecallSession,
   commandQueueBucket,
   commandQueueWeight,
+  easyPracticeCatalogue,
   protocolFocusWeight,
   weightedCommandQueue,
 } from "../../lib/command-queue.ts";
@@ -39,6 +40,12 @@ const review = (overrides: Partial<Review> = {}): Review => ({
 const ipv4 = command("ipv4", "show ip route", "Display the IPv4 routing table.");
 const ipv6 = command("ipv6", "show ipv6 route", "Display the IPv6 routing table.");
 const neutral = command("neutral", "show version", "Display platform information.");
+
+test("adaptive Easy practice excludes the active beginner chapter when alternatives exist", () => {
+  const pool = easyPracticeCatalogue([ipv4, ipv6, neutral], [ipv4.id, neutral.id]);
+  assert.deepEqual(pool.map((item) => item.id), [ipv6.id]);
+  assert.deepEqual(easyPracticeCatalogue([ipv4], [ipv4.id]).map((item) => item.id), [ipv4.id]);
+});
 
 test("protocol weighting favours IPv4 and retains lower-frequency IPv6", () => {
   assert.equal(protocolFocusWeight(ipv4), 2);

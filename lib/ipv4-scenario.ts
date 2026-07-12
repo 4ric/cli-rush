@@ -112,6 +112,7 @@ export interface Ipv4ScenarioActionResult {
   useCase: string;
   verification: string;
   rollback: string;
+  example?: string;
   nextObjective: string;
   errorCode?: Ipv4ScenarioErrorCode;
 }
@@ -119,6 +120,13 @@ export interface Ipv4ScenarioActionResult {
 export interface Ipv4ScenarioChoice {
   id: Ipv4ScenarioChoiceId;
   label: string;
+}
+
+export interface Ipv4ScenarioHint {
+  heading: string;
+  explanation: string;
+  example: string | null;
+  visualFocus: "prompt" | "interface" | "route" | "verification" | "save";
 }
 
 const variants: Ipv4ScenarioParameters[] = [
@@ -181,6 +189,80 @@ export const createIpv4Scenario = (seed = 1): Ipv4ScenarioState => {
     defaultRoute: fault === "wrong-default-next-hop" ? parameters.wrongGateway : null,
     startup: null,
     acceptedActions: 0,
+  };
+};
+
+const scenarioModes = new Set<Ipv4ScenarioMode>(["user", "privileged", "global", "interface"]);
+const scenarioPhases = new Set<Ipv4ScenarioPhase>([
+  "gain-privilege", "enter-global", "select-interface", "configure-address",
+  "enable-interface", "return-to-exec", "inspect-interface", "interpret-interface",
+  "test-initial-reachability", "inspect-routing-table", "diagnose-routing-fault",
+  "repair-enter-global", "remove-faulty-route", "add-default-route",
+  "repair-return-to-exec", "retest-reachability", "save-working-config",
+  "rollback-enter-global", "rollback-remove-route", "rollback-select-interface",
+  "rollback-disable-interface", "rollback-remove-address", "rollback-return-to-exec",
+  "rollback-inspect-interface", "interpret-rollback", "rollback-inspect-routing-table",
+  "save-rollback", "complete",
+]);
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const restoreInterfaceState = (
+  value: unknown,
+  parameters: Ipv4ScenarioParameters,
+): Ipv4InterfaceState | null => {
+  if (!isRecord(value) || typeof value.adminUp !== "boolean") return null;
+  const address = value.address;
+  const mask = value.mask;
+  const addressValid = address === null || address === parameters.localAddress;
+  const maskValid = mask === null || mask === parameters.subnetMask;
+  if (!addressValid || !maskValid || (address === null) !== (mask === null)) return null;
+  return { address: address as string | null, mask: mask as string | null, adminUp: value.adminUp };
+};
+
+export const restoreIpv4ScenarioState = (value: unknown): Ipv4ScenarioState | null => {
+  if (!isRecord(value) || typeof value.seed !== "number") return null;
+  const baseline = createIpv4Scenario(value.seed);
+  if (value.hostname !== "R1" || !scenarioModes.has(value.mode as Ipv4ScenarioMode)) return null;
+  if (!scenarioPhases.has(value.phase as Ipv4ScenarioPhase)) return null;
+  if (!isRecord(value.parameters)
+    || JSON.stringify(value.parameters) !== JSON.stringify(baseline.parameters)
+    || value.fault !== baseline.fault) return null;
+  if (value.selectedInterface !== null && value.selectedInterface !== baseline.parameters.interfaceName) return null;
+  const interfaceState = restoreInterfaceState(value.interfaceState, baseline.parameters);
+  if (!interfaceState) return null;
+  const allowedRoutes = new Set<unknown>([null, baseline.parameters.gateway, baseline.parameters.wrongGateway]);
+  if (!allowedRoutes.has(value.defaultRoute)) return null;
+  if (!Number.isInteger(value.acceptedActions) || (value.acceptedActions as number) < 0 || (value.acceptedActions as number) > 40) return null;
+
+  let startup: Ipv4StartupSnapshot | null = null;
+  if (value.startup !== null) {
+    if (!isRecord(value.startup)
+      || typeof value.startup.configuration !== "string"
+      || value.startup.configuration.length > 2_048
+      || !allowedRoutes.has(value.startup.defaultRoute)) return null;
+    const startupInterface = restoreInterfaceState(value.startup.interfaceState, baseline.parameters);
+    if (!startupInterface) return null;
+    startup = {
+      interfaceState: startupInterface,
+      defaultRoute: value.startup.defaultRoute as string | null,
+      configuration: value.startup.configuration,
+    };
+  }
+
+  return {
+    seed: baseline.seed,
+    hostname: "R1",
+    mode: value.mode as Ipv4ScenarioMode,
+    phase: value.phase as Ipv4ScenarioPhase,
+    parameters: { ...baseline.parameters },
+    fault: baseline.fault,
+    selectedInterface: value.selectedInterface as string | null,
+    interfaceState,
+    defaultRoute: value.defaultRoute as string | null,
+    startup,
+    acceptedActions: value.acceptedActions as number,
   };
 };
 
@@ -263,6 +345,105 @@ export const getIpv4ScenarioChoices = (state: Ipv4ScenarioState): Ipv4ScenarioCh
     default:
       return [];
   }
+};
+
+const commandExampleForPhase = (state: Ipv4ScenarioState): string | null => {
+  const p = state.parameters;
+  switch (state.phase) {
+    case "gain-privilege": return "enable";
+    case "enter-global":
+    case "repair-enter-global":
+    case "rollback-enter-global": return "configure terminal";
+    case "select-interface":
+    case "rollback-select-interface": return `interface ${p.interfaceName}`;
+    case "configure-address": return `ip address ${p.localAddress} ${p.subnetMask}`;
+    case "enable-interface": return "no shutdown";
+    case "return-to-exec":
+    case "repair-return-to-exec":
+    case "rollback-return-to-exec": return "end";
+    case "inspect-interface":
+    case "rollback-inspect-interface": return "show ip interface brief";
+    case "test-initial-reachability":
+    case "retest-reachability": return `ping ${p.remoteTarget}`;
+    case "inspect-routing-table":
+    case "rollback-inspect-routing-table": return "show ip route";
+    case "remove-faulty-route": return `no ip route 0.0.0.0 0.0.0.0 ${p.wrongGateway}`;
+    case "add-default-route": return `ip route 0.0.0.0 0.0.0.0 ${p.gateway}`;
+    case "save-working-config":
+    case "save-rollback": return "copy running-config startup-config";
+    case "rollback-remove-route": return `no ip route 0.0.0.0 0.0.0.0 ${p.gateway}`;
+    case "rollback-disable-interface": return "shutdown";
+    case "rollback-remove-address": return "no ip address";
+    default: return null;
+  }
+};
+
+export const getIpv4ScenarioHint = (
+  state: Ipv4ScenarioState,
+  level: 1 | 2,
+): Ipv4ScenarioHint => {
+  const example = commandExampleForPhase(state);
+  const prompt = ipv4ScenarioPrompt(state);
+  const interpretation = getIpv4ScenarioChoices(state).length > 0;
+
+  if (state.phase === "interpret-interface") {
+    return {
+      heading: level === 1 ? "Read the row as three separate facts" : "Correlate address, Status and Protocol",
+      explanation: level === 1
+        ? "An address proves Layer 3 configuration, Status reflects administrative or physical state, and Protocol reflects the line protocol. Do not infer the whole result from one column."
+        : `The target row should contain ${state.parameters.localAddress} and show up in both the Status and Protocol columns. Together, those facts prove the local interface is operational.`,
+      example: null,
+      visualFocus: "interface",
+    };
+  }
+  if (state.phase === "diagnose-routing-fault") {
+    return {
+      heading: level === 1 ? "Follow the evidence from local to remote" : "Inspect the gateway of last resort",
+      explanation: level === 1
+        ? "The interface is already healthy and the address-based ping failed, so DNS is irrelevant. Compare the connected LAN and default route with the work order."
+        : state.fault === "missing-default-route"
+          ? "The connected branch LAN is present, but the output says the gateway of last resort is not set. Remote prefixes therefore have no matching path."
+          : `A candidate default exists, but it points to ${state.parameters.wrongGateway} instead of the documented gateway ${state.parameters.gateway}.`,
+      example: null,
+      visualFocus: "route",
+    };
+  }
+  if (state.phase === "interpret-rollback") {
+    return {
+      heading: level === 1 ? "Prove both parts of the rollback" : "Look for the original interface state",
+      explanation: level === 1
+        ? "A complete rollback must remove the Layer 3 address and restore the administrative shutdown state. Check both, not just one."
+        : "The row should say unassigned and administratively down. Protocol down then agrees with the disabled interface state.",
+      example: null,
+      visualFocus: "interface",
+    };
+  }
+
+  const navigation = ["gain-privilege", "enter-global", "repair-enter-global", "rollback-enter-global", "select-interface", "rollback-select-interface", "return-to-exec", "repair-return-to-exec", "rollback-return-to-exec"].includes(state.phase);
+  const route = ["inspect-routing-table", "remove-faulty-route", "add-default-route", "rollback-remove-route", "rollback-inspect-routing-table"].includes(state.phase);
+  const save = ["save-working-config", "save-rollback"].includes(state.phase);
+  const verification = ["inspect-interface", "test-initial-reachability", "retest-reachability", "rollback-inspect-interface"].includes(state.phase);
+
+  return {
+    heading: level === 1 ? "Use the prompt as your location marker" : "A worked command for this exact work order",
+    explanation: level === 1
+      ? navigation
+        ? `You are at ${prompt}. First identify the destination CLI context, then choose the command family that moves from the current prompt towards it.`
+        : route
+          ? "Treat the routing table as a forwarding decision: destination and mask select traffic, while the next hop says where unmatched traffic leaves."
+          : save
+            ? "Verification proves the running state. Saving is a separate action that copies that verified state into startup storage."
+            : verification
+              ? "Use a read-only command that directly measures the condition named in the objective, then interpret its output before changing anything else."
+              : "Work from feature → action → documented values. The prompt confirms the scope; the work order supplies the interface or IPv4 values."
+      : example
+        ? `At ${prompt}, the complete command for the current seeded values is shown below. Type it yourself or use Tab to practise IOS completion.`
+        : interpretation
+          ? "Choose the conclusion supported by all displayed evidence, not the most familiar fault."
+          : "The lab is complete; review the report or restart with a new seeded work order.",
+    example: level === 2 ? example : null,
+    visualFocus: navigation ? "prompt" : route ? "route" : save ? "save" : verification ? "verification" : "interface",
+  };
 };
 
 type ParsedCommand =
@@ -539,6 +720,7 @@ interface LearningCopy {
   useCase: string;
   verification: string;
   rollback: string;
+  example?: string;
 }
 
 const learningFor = (kind: ParsedCommand["kind"]): LearningCopy => {
@@ -558,6 +740,27 @@ const learningFor = (kind: ParsedCommand["kind"]): LearningCopy => {
     case "default-route": return { explanation: "A static default route now forwards destinations with no more-specific match towards the branch gateway.", useCase: "Small branch routers often use one upstream gateway for all non-local networks.", verification: "Inspect the candidate default in the routing table, then repeat the original reachability test.", rollback: "Remove the exact static route, including its next hop, if the path is wrong or decommissioned." };
     case "remove-default-route": return { explanation: "The specified static default route has been removed without changing the connected interface route.", useCase: "Delete a stale next hop before installing the documented route, or remove lab routing during rollback.", verification: "Inspect the routing table and confirm the unwanted candidate default is absent.", rollback: "Reinstall the documented default route if removal interrupts intended upstream connectivity." };
     case "save": return { explanation: "The current running configuration has been copied into simulated startup storage.", useCase: "Persist a verified change so it survives a device reload.", verification: "The simulator reports a completed configuration build and records an immutable startup snapshot.", rollback: "After undoing a change, save again so the startup configuration also reflects the rollback." };
+  }
+};
+
+const workedExampleFor = (kind: ParsedCommand["kind"], state: Ipv4ScenarioState): string => {
+  const p = state.parameters;
+  switch (kind) {
+    case "enable": return "R1> enable  →  R1# — the prompt changes, but device configuration does not.";
+    case "configure-terminal": return "R1# configure terminal  →  R1(config)# — configuration commands are now available.";
+    case "interface": return `R1(config)# interface ${p.interfaceName}  →  R1(config-if)# — later changes are scoped to that port.`;
+    case "ip-address": return `R1(config-if)# ip address ${p.localAddress} ${p.subnetMask} — address and mask must describe the same subnet.`;
+    case "no-shutdown": return "R1(config-if)# no shutdown — removes the administrative block; it does not repair cabling or a peer fault.";
+    case "shutdown": return "R1(config-if)# shutdown — deliberately withdraws the interface before its temporary addressing is removed.";
+    case "no-ip-address": return "R1(config-if)# no ip address — removes both the interface address and its connected route.";
+    case "exit":
+    case "end": return "R1(config-if)# end  →  R1# — return to EXEC mode before running operational show commands.";
+    case "show-ip-interface-brief": return `Look for ${p.interfaceName}, ${p.localAddress}, Status up and Protocol up in the same row.`;
+    case "ping": return `R1# ping ${p.remoteTarget} — “!!!!!” and 100 percent indicate replies; “.....” and 0 percent only prove failure, not its cause.`;
+    case "show-ip-route": return `Compare “Gateway of last resort” with ${p.gateway}; a connected ${p.networkAddress}/${p.prefixLength} alone cannot reach every remote prefix.`;
+    case "default-route": return `R1(config)# ip route 0.0.0.0 0.0.0.0 ${p.gateway} — unmatched IPv4 traffic is sent to the documented upstream gateway.`;
+    case "remove-default-route": return `Use the exact no form with the installed next hop; removing ${p.wrongGateway} does not remove the connected LAN route.`;
+    case "save": return "R1# copy running-config startup-config — only save after the interface, route and reachability checks agree.";
   }
 };
 
@@ -728,6 +931,7 @@ export const runIpv4ScenarioCommand = (current: Ipv4ScenarioState, raw: string):
     state,
     output,
     ...learning,
+    example: workedExampleFor(command.kind, current),
     nextObjective: getIpv4ScenarioObjective(state),
   };
 };
@@ -767,6 +971,7 @@ export const submitIpv4ScenarioInterpretation = (
       useCase: "Separate local interface health from upstream routing before diagnosing an end-to-end failure.",
       verification: "The next reachability test checks beyond the local link.",
       rollback: "A read-only interpretation does not require rollback.",
+      example: `Address ${state.parameters.localAddress} plus Status up and Protocol up supports “interface operational”; any one field alone would be incomplete evidence.`,
     };
   } else if (state.phase === "diagnose-routing-fault") {
     state.phase = "repair-enter-global";
@@ -776,12 +981,14 @@ export const submitIpv4ScenarioInterpretation = (
           useCase: "This distinction prevents unnecessary interface changes when local Layer 3 state is already healthy.",
           verification: "After repair, inspect the candidate default and repeat the original ping.",
           rollback: "Remove the added static default route by matching its destination, mask and next hop.",
+          example: `A connected ${state.parameters.networkAddress}/${state.parameters.prefixLength} route proves the LAN, while “Gateway of last resort is not set” explains why ${state.parameters.remoteTarget} has no path.`,
         }
       : {
           explanation: "A default route exists, but its next hop does not match the documented branch gateway.",
           useCase: "A route can be present yet still be operationally wrong; validate values as well as route existence.",
           verification: "After repair, confirm the gateway of last resort and repeat the original ping.",
           rollback: "Remove the incorrect route before adding the documented next hop.",
+          example: `The table may contain 0.0.0.0/0, but ${state.parameters.wrongGateway} is still wrong because the work order specifies ${state.parameters.gateway}.`,
         };
   } else {
     state.phase = "rollback-inspect-routing-table";
@@ -790,6 +997,7 @@ export const submitIpv4ScenarioInterpretation = (
       useCase: "Post-change verification is as important for removals as it is for service activation.",
       verification: "Inspect the routing table next to prove that the temporary gateway of last resort was also removed before saving.",
       rollback: "Restore the documented interface address and enable the port if the rollback itself must be reversed.",
+      example: `The rollback evidence must combine IP-Address unassigned with Status administratively down; checking only Protocol down would not prove why it is down.`,
     };
   }
 

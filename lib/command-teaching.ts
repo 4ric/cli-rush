@@ -3,6 +3,8 @@ import type { CliMode, Command, CommandKind } from "./engine.ts";
 export interface CommandTeaching {
   purpose: string;
   whenToUse: string;
+  mentalModel: string;
+  workedExample: string;
   syntax: string;
   expected: string;
   verify: string;
@@ -176,10 +178,41 @@ const riskFor = (command: TeachingInput): string => {
   return "Configuration change: verify scope, capture the baseline and retain a rollback path before using it on a real device.";
 };
 
+const mentalModelFor = (command: TeachingInput): string => {
+  if (command.kind === "navigation") {
+    return "Treat the prompt like a location marker: the command is a doorway, the new prompt proves where you arrived, and configuration state stays unchanged until you issue a feature command.";
+  }
+  if (command.kind === "verification") {
+    return "Use the evidence loop: ask one precise question, read the smallest useful output, compare it with the intended baseline, then decide whether another check or a change is justified.";
+  }
+  if (command.topic === "Access control") {
+    return "Picture traffic moving through an ordered filter. IOS evaluates from top to bottom, stops at the first match and denies anything that reaches the implicit final deny.";
+  }
+  if (command.topic === "Routing" || command.topic === "OSPF") {
+    return "Picture a forwarding decision from most-specific prefix to least-specific prefix. The selected route supplies an exit interface or next hop; the return path must also exist.";
+  }
+  if (command.topic.includes("Interface")) {
+    return "Separate configuration, administrative state and operational state. An address can be correct while the interface is shut, physically down or paired with the wrong subnet mask.";
+  }
+  return "Use the safe change loop: capture the baseline, enter the narrowest configuration scope, make one intentional change, verify observable behaviour, then save or roll back.";
+};
+
+const workedExampleFor = (command: TeachingInput): string => {
+  if (command.kind === "navigation") {
+    return `Example: read the current prompt first, enter “${command.canonical}”, then confirm that the prompt changes to the intended context before typing the next command.`;
+  }
+  if (command.kind === "verification") {
+    return `Example: run “${command.canonical}” against a known-good baseline, identify the field that answers the objective, and corroborate an unexpected value with a more specific read-only command.`;
+  }
+  return `Example change: capture the relevant show output, enter “${command.canonical}” in ${modePrompt[command.mode]}, run the listed verification, and use the rollback guidance immediately if the observed state differs from the plan.`;
+};
+
 export const teachingFor = (command: TeachingInput): CommandTeaching => ({
   purpose: purposeFor(command),
   whenToUse: useCases[command.topic]
     ?? `Use it when working with ${command.topic.toLocaleLowerCase("en-GB")} and the objective requires this exact operation.`,
+  mentalModel: mentalModelFor(command),
+  workedExample: workedExampleFor(command),
   syntax: variableSyntax(command.canonical),
   expected: expectedFor(command),
   verify: verification[command.topic]
