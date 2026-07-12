@@ -9,12 +9,29 @@ const port = Number(process.env.PORT || 3000);
 const upstreamPort = Number(process.env.CLI_RUSH_INTERNAL_PORT || 4174);
 const dataDir = process.env.CLI_RUSH_DATA_DIR || "/data";
 const username = process.env.CLI_RUSH_USERNAME || "ignas";
-const cookieSecure = process.env.CLI_RUSH_COOKIE_SECURE !== "false";
+const cookieSecureByDefault = process.env.CLI_RUSH_COOKIE_SECURE !== "false";
 const trustProxy = process.env.CLI_RUSH_TRUST_PROXY === "true";
-const publicOrigin = process.env.CLI_RUSH_PUBLIC_ORIGIN?.replace(/\/$/, "") || null;
+const configuredOrigin = (name) => {
+  const value = process.env[name]?.replace(/\/$/, "") || null;
+  if (!value) return null;
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`${name} must be a complete HTTP or HTTPS origin.`);
+  }
+  if (!["http:", "https:"].includes(parsed.protocol) || parsed.origin !== value) {
+    throw new Error(`${name} must contain only the scheme, hostname and optional port.`);
+  }
+  return value;
+};
+const publicOrigin = configuredOrigin("CLI_RUSH_PUBLIC_ORIGIN");
+const localOrigin = configuredOrigin("CLI_RUSH_LOCAL_ORIGIN");
+const allowedOrigins = new Set([publicOrigin, localOrigin].filter(Boolean));
 const sessionHours = Math.min(168, Math.max(1, Number(process.env.CLI_RUSH_SESSION_HOURS || 12)));
 const customCommandsPath = `${dataDir}/custom-commands.json`;
-const cookieName = cookieSecure ? "__Host-cli_rush_session" : "cli_rush_session";
+const secureCookieName = "__Host-cli_rush_session";
+const localCookieName = "cli_rush_session";
 
 async function secret(directName, fileName) {
   if (process.env[fileName]) return (await readFile(process.env[fileName], "utf8")).trim();
@@ -56,8 +73,23 @@ const issueSession = () => {
 const parseCookies = (header = "") => Object.fromEntries(
   header.split(";").map((part) => part.trim().split("=")).filter(([key, value]) => key && value),
 );
+const firstHeaderValue = (value = "") => String(value).split(",")[0].trim();
+const inferredOrigin = (request) => {
+  const forwardedProtocol = trustProxy ? firstHeaderValue(request.headers["x-forwarded-proto"]) : "";
+  const protocol = forwardedProtocol || (request.socket.encrypted ? "https" : "http");
+  return `${protocol}://${request.headers.host}`;
+};
+const requestUsesSecureCookie = (request) => {
+  const origin = request.headers.origin || inferredOrigin(request);
+  try {
+    return new URL(origin).protocol === "https:";
+  } catch {
+    return cookieSecureByDefault;
+  }
+};
+const cookieNameFor = (request) => requestUsesSecureCookie(request) ? secureCookieName : localCookieName;
 const authenticated = (request) => {
-  const token = parseCookies(request.headers.cookie)[cookieName];
+  const token = parseCookies(request.headers.cookie)[cookieNameFor(request)];
   if (!token) return false;
   const [payload, signature] = token.split(".");
   if (!payload || !signature) return false;
@@ -116,7 +148,7 @@ const securityHeaders = (extra = {}) => ({
   "referrer-policy": "no-referrer",
   "x-content-type-options": "nosniff",
   "x-frame-options": "DENY",
-  ...(cookieSecure ? { "strict-transport-security": "max-age=31536000; includeSubDomains" } : {}),
+  ...(cookieSecureByDefault ? { "strict-transport-security": "max-age=31536000; includeSubDomains" } : {}),
   ...extra,
 });
 const send = (response, status, body, extra = {}) => {
@@ -135,10 +167,12 @@ const readBody = async (request, limit = 1024 * 1024) => {
   }
   return Buffer.concat(chunks);
 };
-const expectedOrigin = (request) => publicOrigin || `${String(
-  request.headers["x-forwarded-proto"] || (cookieSecure ? "https" : "http"),
-).split(",")[0]}://${request.headers.host}`;
-const validOrigin = (request) => request.headers.origin === expectedOrigin(request);
+const validOrigin = (request) => {
+  const origin = request.headers.origin;
+  return typeof origin === "string" && (allowedOrigins.size > 0
+    ? allowedOrigins.has(origin)
+    : origin === inferredOrigin(request));
+};
 
 function validateCustomCommands(value) {
   if (!Array.isArray(value) || value.length > 500) throw new Error("Store up to 500 custom commands.");
@@ -262,7 +296,8 @@ const server = http.createServer(async (request, response) => {
       return;
     }
     attempts.delete(ip);
-    const cookie = `${cookieName}=${issueSession()}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${sessionHours * 3600}${cookieSecure ? "; Secure" : ""}`;
+    const secure = requestUsesSecureCookie(request);
+    const cookie = `${cookieNameFor(request)}=${issueSession()}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${sessionHours * 3600}${secure ? "; Secure" : ""}`;
     send(response, 303, "", { location: "/", "set-cookie": cookie });
     return;
   }
@@ -271,7 +306,8 @@ const server = http.createServer(async (request, response) => {
       send(response, 403, "Invalid request origin.");
       return;
     }
-    send(response, 303, "", { location: "/login", "set-cookie": `${cookieName}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${cookieSecure ? "; Secure" : ""}` });
+    const secure = requestUsesSecureCookie(request);
+    send(response, 303, "", { location: "/login", "set-cookie": `${cookieNameFor(request)}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secure ? "; Secure" : ""}` });
     return;
   }
   if (!authenticated(request)) {

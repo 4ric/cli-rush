@@ -13,6 +13,7 @@ test("Compose keeps the service private, persistent and hardened", async () => {
   assert.match(compose, /no-new-privileges:true/u);
   assert.match(compose, /cap_drop:\s*\n\s*- ALL/u);
   assert.match(compose, /CLI_RUSH_PUBLIC_ORIGIN: \$\{CLI_RUSH_PUBLIC_ORIGIN:\?/u);
+  assert.match(compose, /CLI_RUSH_LOCAL_ORIGIN: \$\{CLI_RUSH_LOCAL_ORIGIN:-\}/u);
   assert.match(compose, /CLI_RUSH_PASSWORD_HASH_FILE: \/run\/secrets\/password_hash/u);
   assert.match(compose, /profiles: \["setup"\]/u);
   assert.doesNotMatch(compose, /init-storage:/u);

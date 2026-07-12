@@ -47,6 +47,7 @@ test("single-user gateway protects the app and persists validated custom command
   const port = await freePort();
   const internalPort = await freePort();
   const origin = `http://127.0.0.1:${port}`;
+  const publicOrigin = "https://cli-rush.example.test";
   const child = spawn(process.execPath, ["server/auth-server.mjs"], {
     cwd: projectRoot,
     stdio: "ignore",
@@ -56,8 +57,10 @@ test("single-user gateway protects the app and persists validated custom command
       CLI_RUSH_INTERNAL_PORT: String(internalPort),
       CLI_RUSH_DATA_DIR: data,
       CLI_RUSH_USERNAME: "ignas",
-      CLI_RUSH_COOKIE_SECURE: "false",
-      CLI_RUSH_PUBLIC_ORIGIN: origin,
+      CLI_RUSH_COOKIE_SECURE: "true",
+      CLI_RUSH_TRUST_PROXY: "true",
+      CLI_RUSH_PUBLIC_ORIGIN: publicOrigin,
+      CLI_RUSH_LOCAL_ORIGIN: origin,
       CLI_RUSH_PASSWORD_HASH_FILE: path.join(secrets, "password_hash"),
       CLI_RUSH_SESSION_SECRET_FILE: path.join(secrets, "session_secret"),
     },
@@ -68,6 +71,14 @@ test("single-user gateway protects the app and persists validated custom command
   const unauthenticated = await fetch(`${origin}/`, { redirect: "manual" });
   assert.equal(unauthenticated.status, 303);
   assert.equal(unauthenticated.headers.get("location"), "/login");
+
+  const rejectedOrigin = await fetch(`${origin}/login`, {
+    method: "POST",
+    redirect: "manual",
+    headers: { "content-type": "application/x-www-form-urlencoded", origin: "http://192.0.2.50", "sec-fetch-site": "same-origin" },
+    body: new URLSearchParams({ username: "ignas", password }),
+  });
+  assert.equal(rejectedOrigin.status, 403);
 
   const wrong = await fetch(`${origin}/login`, {
     method: "POST",
@@ -88,9 +99,32 @@ test("single-user gateway protects the app and persists validated custom command
   assert.match(cookie, /^cli_rush_session=/);
   assert.match(cookie, /HttpOnly/i);
   assert.match(cookie, /SameSite=Strict/i);
+  assert.doesNotMatch(cookie, /; Secure/i);
 
   const authenticated = await fetch(`${origin}/`, { headers: { cookie } });
   assert.equal(authenticated.status, 200);
+
+  const publicRequestHeaders = {
+    host: "cli-rush.example.test",
+    origin: publicOrigin,
+    "sec-fetch-site": "same-origin",
+    "x-forwarded-for": "192.0.2.10",
+    "x-forwarded-proto": "https",
+  };
+  const publicLogin = await fetch(`${origin}/login`, {
+    method: "POST",
+    redirect: "manual",
+    headers: { ...publicRequestHeaders, "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ username: "ignas", password }),
+  });
+  assert.equal(publicLogin.status, 303);
+  const publicCookie = publicLogin.headers.get("set-cookie");
+  assert.match(publicCookie, /^__Host-cli_rush_session=/);
+  assert.match(publicCookie, /; Secure/i);
+  const publicAuthenticated = await fetch(`${origin}/`, {
+    headers: { ...publicRequestHeaders, cookie: publicCookie },
+  });
+  assert.equal(publicAuthenticated.status, 200);
 
   const rejectedWrite = await fetch(`${origin}/api/custom-commands`, {
     method: "PUT",

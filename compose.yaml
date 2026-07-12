@@ -14,6 +14,7 @@ services:
       CLI_RUSH_COOKIE_SECURE: "true"
       CLI_RUSH_TRUST_PROXY: "true"
       CLI_RUSH_PUBLIC_ORIGIN: ${CLI_RUSH_PUBLIC_ORIGIN:?Set the public HTTPS URL in .env}
+      CLI_RUSH_LOCAL_ORIGIN: ${CLI_RUSH_LOCAL_ORIGIN:-}
       CLI_RUSH_PASSWORD_HASH_FILE: /run/secrets/password_hash
       CLI_RUSH_SESSION_SECRET_FILE: /run/secrets/session_secret
     volumes:

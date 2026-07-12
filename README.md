@@ -110,7 +110,7 @@ cd /data/containers/cli-rush
 sh scripts/docker-setup.sh
 ```
 
-Then set the exact public HTTPS origin in `.env` and start with `docker compose up -d --build`. The application remains bound to `127.0.0.1:3080`; `./data` and `./secrets` survive rebuilds. See [DOCKER-DEPLOY.md](DOCKER-DEPLOY.md) for installation, reverse-proxy, update, backup and removal instructions.
+Then set the exact public HTTPS origin in `.env` and start with `docker compose up -d --build`. The application remains bound to `127.0.0.1:3080` by default; `./data` and `./secrets` survive rebuilds. An optional exact private-LAN origin can provide direct HTTP access with a separate local session. See [DOCKER-DEPLOY.md](DOCKER-DEPLOY.md) for installation, reverse-proxy, dual-origin access, update, backup and removal instructions.
 
 ## Custom commands
 
