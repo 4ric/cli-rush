@@ -19,7 +19,7 @@ test("Compose keeps the service private, persistent and hardened", async () => {
 
 test("Docker image has a pruned non-root runtime and health check", async () => {
   const dockerfile = await read("Dockerfile");
-  assert.match(dockerfile, /apk add --no-cache bash/u);
+  assert.match(dockerfile, /apk add --no-cache bash coreutils/u);
   assert.match(dockerfile, /npm prune --omit=dev/u);
   assert.match(dockerfile, /USER node/u);
   assert.match(dockerfile, /HEALTHCHECK/u);
