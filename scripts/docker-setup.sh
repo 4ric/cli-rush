@@ -11,7 +11,6 @@ if [ ! -f .env ]; then
 fi
 
 mkdir -p data secrets
-docker compose --profile setup run --rm init-storage
 
 if [ -f secrets/password_hash ] || [ -f secrets/session_secret ]; then
   if [ ! -f secrets/password_hash ] || [ ! -f secrets/session_secret ]; then
@@ -22,5 +21,7 @@ if [ -f secrets/password_hash ] || [ -f secrets/session_secret ]; then
 else
   docker compose --profile setup run --rm init-secrets
 fi
+
+docker compose --profile setup run --rm init-storage
 
 echo "Setup complete. Review .env, then run: docker compose up -d --build"
