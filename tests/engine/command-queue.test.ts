@@ -5,12 +5,15 @@ import {
   buildDailyRecallSession,
   commandQueueBucket,
   commandQueueWeight,
+  commandsAreEquivalent,
   easyPracticeCatalogue,
   protocolFocusWeight,
+  SEMANTIC_COOLDOWN_SIZE,
   weightedCommandQueue,
 } from "../../lib/command-queue.ts";
 import type { CommandRecallHistory } from "../../lib/command-queue.ts";
 import type { Command } from "../../lib/engine.ts";
+import type { GameModeId } from "../../lib/game-modes.ts";
 import type { Review } from "../../lib/scheduler.ts";
 
 const now = Date.parse("2026-07-11T12:00:00Z");
@@ -123,6 +126,100 @@ test("a new queue never repeats the previous opening command or canonical form",
     assert.equal(new Set(queue).size, catalogue.length);
     assert.deepEqual([...queue].sort(), catalogue.map((entry) => entry.id).sort());
   }
+});
+
+test("semantic equivalence covers canonical shape, family, seeded wording and exit/end navigation", () => {
+  const sameCanonical = command("other.show-route", "show ip route", "Inspect routes in another seeded task.");
+  assert.equal(commandsAreEquivalent(ipv4, sameCanonical), true);
+
+  const sameFamily = command("show.ospf", "show ip ospf", "Inspect the OSPF process.");
+  assert.equal(commandsAreEquivalent(ipv4, sameFamily), true);
+
+  const seededA = command("route.seed-a", "ip route 192.0.2.0 255.255.255.0 10.0.0.1", "Install the route to 192.0.2.0 through 10.0.0.1.", "Static routing");
+  const seededB = command("route.seed-b", "ip route 198.51.100.0 255.255.255.0 10.0.0.2", "Install the route to 198.51.100.0 through 10.0.0.2.", "Static routing");
+  assert.equal(commandsAreEquivalent(seededA, seededB), true);
+
+  const exit = { ...command("nav.exit-interface", "exit", "Leave interface configuration."), mode: "interface" as const, kind: "navigation" as const };
+  const end = { ...command("nav.end-router", "end", "Return to Privileged EXEC."), mode: "router" as const, kind: "navigation" as const };
+  assert.equal(commandsAreEquivalent(exit, end), true);
+
+  assert.equal(commandsAreEquivalent(ipv4, neutral), false);
+});
+
+const seededRandom = (seed: number): (() => number) => {
+  let state = seed >>> 0 || 0x9e3779b9;
+  return () => {
+    state ^= state << 13;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    return (state >>> 0) / 0x1_0000_0000;
+  };
+};
+
+const semanticFixture = (): Command[] => Array.from({ length: 20 }, (_, family) => {
+  const familyName = `group${String.fromCharCode(97 + family)}`;
+  return Array.from({ length: 3 }, (_, variant): Command => ({
+    ...command(
+      `fixture.${familyName}.variant-${variant}`,
+      `show ${familyName} ${variant + 1}`,
+      `Inspect seeded ${familyName} value ${variant + 1}.`,
+      `Fixture ${familyName}`,
+    ),
+    explanation: "A deterministic scheduler fixture.",
+  }));
+}).flat();
+
+const assertCooldown = (queue: readonly string[], catalogue: readonly Command[]): void => {
+  const byId = new Map(catalogue.map((item) => [item.id, item]));
+  for (let index = 0; index < queue.length; index += 1) {
+    const current = byId.get(queue[index])!;
+    for (let distance = 1; distance <= SEMANTIC_COOLDOWN_SIZE && index - distance >= 0; distance += 1) {
+      const previous = byId.get(queue[index - distance])!;
+      assert.equal(
+        commandsAreEquivalent(current, previous),
+        false,
+        `${current.id} repeated ${previous.id} after only ${distance - 1} intervening questions`,
+      );
+    }
+  }
+};
+
+test("Easy, Normal, Hard and Hardcore preserve an eight-question semantic cooldown across 100 seeds", () => {
+  const catalogue = semanticFixture();
+  const modes: readonly GameModeId[] = ["easy", "normal", "hard", "hardcore"];
+  for (const mode of modes) {
+    for (let seed = 1; seed <= 100; seed += 1) {
+      const queue = weightedCommandQueue(
+        catalogue,
+        {},
+        catalogue[0].id,
+        seededRandom(seed * 17 + modes.indexOf(mode)),
+        { now, limit: catalogue.length },
+      );
+      assert.equal(queue.length, catalogue.length, `${mode}/${seed}`);
+      assert.equal(new Set(queue).size, catalogue.length, `${mode}/${seed}`);
+      assert.equal(
+        commandsAreEquivalent(catalogue[0], catalogue.find((item) => item.id === queue[0])!),
+        false,
+        `${mode}/${seed} repeated the previous opening concept`,
+      );
+      assertCooldown(queue, catalogue);
+    }
+  }
+});
+
+test("an appended queue honours semantic cooldown history even when prior commands are outside its catalogue", () => {
+  const catalogue = semanticFixture();
+  const recentCommands = Array.from({ length: 8 }, (_, family) => catalogue[family * 3]);
+  const remaining = catalogue.filter((item) => !recentCommands.some((previous) => previous.id === item.id));
+  const queue = weightedCommandQueue(remaining, {}, recentCommands.at(-1)!.id, seededRandom(42), {
+    now,
+    limit: 20,
+    recentCommands,
+  });
+  const first = remaining.find((item) => item.id === queue[0])!;
+  assert.equal(recentCommands.some((previous) => commandsAreEquivalent(first, previous)), false);
+  assertCooldown([...recentCommands.map((item) => item.id), ...queue], catalogue);
 });
 
 test("Daily Recall is bounded, due-only and ordered by overdue time", () => {

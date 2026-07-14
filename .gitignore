@@ -44,3 +44,27 @@ next-env.d.ts
 /work/
 /data/
 /secrets/
+
+# Sensitive configuration references are read-only inputs and must stay outside Git.
+/configuration-references/
+/production-configs/
+/reference-configs/
+/source-configs/
+*.cfg
+*.conf
+*.cer
+*.crt
+*.jks
+*.key
+*.p12
+*.pfx
+*.pcap
+*.pcapng
+**/big site router.txt
+**/big site switch1.txt
+**/big site switch2.txt
+**/big site switch3.txt
+**/small site router.txt
+**/small site switch1.txt
+**/small site switch2.txt
+codex-clipboard-*.png

@@ -1,16 +1,53 @@
 /**
- * Deterministic, local-only guided device builds.
- *
- * Player input is inert text and is compared with a bounded lesson catalogue.
- * It is never executed by a shell, evaluator, database or network device.
+ * Registry-backed guided builds for the declared router and Catalyst profiles.
+ * Player input is inert text; it is parsed by the same deterministic registry
+ * used by recall, contextual help and Tab completion.
  */
 
-export type DeviceBuildLabId = "router-foundation" | "switch-foundation";
-export type DeviceBuildMode = "user" | "privileged" | "global" | "line" | "interface" | "radius" | "dhcp" | "vlan";
-export type DeviceBuildPhase = "access" | "identity" | "security" | "services" | "interfaces" | "verification";
+import { cliHelp, completeCliInput, type CliHelp, type CliCompletion } from "./cli-assistance.ts";
+import {
+  buildCommandRegistry,
+  parseRegistryInput,
+  redactRegistryInput,
+  type CommandRegistry,
+  type ParsedCommandEvent,
+  type RegistryCommand,
+  type RegistryParseResult,
+} from "./command-registry.ts";
+import { getDeviceProfile, type DeviceProfileId } from "./device-profiles.ts";
+import {
+  commands,
+  executeCliCommand,
+  initialDevice,
+  modeNames,
+  prompt,
+  restoreDeviceCheckpoint,
+  restoreDeviceState,
+  runningConfig,
+  type CliContext,
+  type CliExecutionResult,
+  type Command,
+  type CommandKind,
+  type DeviceState,
+  type PendingInteraction,
+} from "./engine.ts";
+import {
+  createLabContent,
+  labContentDefinitions,
+  type LabContentDefinition,
+  type LabContentStep,
+  type LabContext,
+  type LabId,
+  type LabPhase,
+} from "./lab-content.ts";
+
+export type DeviceBuildLabId = LabId;
+export type DeviceBuildMode = LabContext;
+export type DeviceBuildPhase = LabPhase;
 
 export interface DeviceBuildStep {
   id: string;
+  conceptId: string;
   phase: DeviceBuildPhase;
   mode: DeviceBuildMode;
   command: string;
@@ -19,10 +56,14 @@ export interface DeviceBuildStep {
   detail: string;
   verify: string;
   rollback: string;
-  output?: string[];
+  hint1: string;
+  hint2: string;
+  interpretation: string;
+  commonFailure: string;
+  output?: readonly string[];
   nextMode?: DeviceBuildMode;
-  nextHostname?: string;
-  sensitiveTokens?: number[];
+  nextHostname?: "R1" | "SW1";
+  sensitiveArgumentNames?: readonly string[];
 }
 
 export interface DeviceBuildDefinition {
@@ -32,216 +73,1114 @@ export interface DeviceBuildDefinition {
   title: string;
   summary: string;
   deviceType: "router" | "switch";
+  deviceProfile: DeviceProfileId;
   steps: DeviceBuildStep[];
 }
 
 export interface DeviceBuildState {
-  version: 1;
+  version: 3;
+  seed: number;
   labId: DeviceBuildLabId;
   stepIndex: number;
   mode: DeviceBuildMode;
   hostname: string;
   completed: boolean;
+  effects: string[];
+  skippedSatisfiedStepIds: string[];
+  runningConfiguration: string[];
+  startupConfiguration: string[] | null;
+  pendingConfirmation: DeviceBuildPendingConfirmation;
+  /** Authoritative serialisable simulator state. The fields above are UI-compatible derived mirrors. */
+  device: DeviceState;
 }
+
+/** UI mirror of the authoritative engine interaction stored on `device`. */
+export type DeviceBuildPendingConfirmation =
+  | "save-startup"
+  | "reload"
+  | "erase-startup"
+  | "default-interface"
+  | null;
+
+export type DeviceBuildFeedbackCategory =
+  | "objective-complete"
+  | "valid-unrelated"
+  | "awaiting-confirmation"
+  | "wrong-context"
+  | "incomplete"
+  | "ambiguous"
+  | "invalid"
+  | "invalid-value"
+  | "complete";
 
 export interface DeviceBuildResult {
   accepted: boolean;
+  valid: boolean;
   state: DeviceBuildState;
   output: string[];
   explanation: string;
   useCase: string;
   verification: string;
   rollback: string;
-  errorCode?: "EMPTY" | "TOO_LONG" | "WRONG_MODE" | "WRONG_COMMAND" | "COMPLETE";
+  interpretation?: string;
+  commonFailure?: string;
+  displayInput?: string;
+  category: DeviceBuildFeedbackCategory;
+  awaitingConfirmation?: boolean;
+  skippedSatisfiedStepIds?: string[];
+  errorCode?:
+    | "EMPTY"
+    | "TOO_LONG"
+    | "WRONG_MODE"
+    | "WRONG_COMMAND"
+    | "INCOMPLETE"
+    | "AMBIGUOUS"
+    | "INVALID_VALUE"
+    | "VALID_UNRELATED"
+    | "COMPLETE";
 }
 
-const step = (
-  id: string,
-  phase: DeviceBuildPhase,
-  mode: DeviceBuildMode,
-  command: string,
-  objective: string,
-  why: string,
-  detail: string,
-  verify: string,
-  rollback: string,
-  options: Pick<DeviceBuildStep, "output" | "nextMode" | "nextHostname" | "sensitiveTokens"> = {},
-): DeviceBuildStep => ({ id, phase, mode, command, objective, why, detail, verify, rollback, ...options });
+const asStep = (item: LabContentStep): DeviceBuildStep => ({
+  id: item.id,
+  conceptId: item.conceptId,
+  phase: item.phase,
+  mode: item.context,
+  command: item.command,
+  objective: item.task,
+  why: item.why,
+  detail: item.effect,
+  verify: item.verify,
+  rollback: item.recovery,
+  hint1: item.hint1,
+  hint2: item.hint2,
+  interpretation: item.interpretation,
+  commonFailure: item.commonFailure,
+  ...(item.output ? { output: item.output } : {}),
+  ...(item.nextContext ? { nextMode: item.nextContext } : {}),
+  ...(item.nextHostname ? { nextHostname: item.nextHostname } : {}),
+  ...(item.sensitiveArgumentNames ? { sensitiveArgumentNames: item.sensitiveArgumentNames } : {}),
+});
 
-const sharedOpening = (hostname: string): DeviceBuildStep[] => [
-  step("enable", "access", "user", "enable", "Move from User EXEC to Privileged EXEC mode.", "User EXEC is deliberately restricted. Privileged EXEC gives an administrator access to inspection and configuration entry points.", "The prompt changes from > to #. That prompt symbol is a location marker: # means you can inspect the whole device and enter configuration mode.", "Confirm the prompt ends in #.", "Use disable to return to User EXEC.", { nextMode: "privileged" }),
-  step("configure", "access", "privileged", "configure terminal", "Enter Global Configuration mode.", "Persistent feature changes begin in Global Configuration mode rather than at the EXEC prompt.", "The (config) marker shows that subsequent commands alter the running configuration. Nothing is saved to startup configuration until the final copy command.", "Confirm the prompt contains (config)#.", "Use end to return directly to Privileged EXEC.", { nextMode: "global" }),
-  step("hostname", "identity", "global", `hostname ${hostname}`, `Give the device the hostname ${hostname}.`, "A meaningful hostname identifies the device in prompts, logs and monitoring systems, reducing the chance of configuring the wrong box.", "Hostname changes take effect immediately in the prompt. A consistent site-role-number naming standard is more useful than a decorative name.", `Confirm the next prompt begins ${hostname}.`, "Use hostname Router or hostname Switch to restore the platform default.", { nextHostname: hostname }),
-  step("enable-secret", "security", "global", "enable secret Str0ngEnable!", "Protect Privileged EXEC with an enable secret.", "The enable secret protects the privilege boundary and is stored as a one-way hash on modern IOS releases.", "This lab treats Str0ngEnable! as a case-sensitive training secret. In production, use an organisation-approved unique secret and a supported modern hashing type.", "After saving, leave Privileged EXEC and test that enable requests authentication on a real lab image.", "Replace it with a new enable secret; do not remove the control before a replacement exists.", { sensitiveTokens: [2] }),
-  step("password-encryption", "security", "global", "service password-encryption", "Obscure remaining plaintext-style passwords in the configuration.", "This reduces casual exposure in configuration output, but it is not strong cryptographic protection.", "Type 7 obfuscation is reversible. Prefer secret-based commands and secure configuration handling; never treat this command as sufficient password security.", "Inspect the relevant running configuration on a real lab and confirm supported secrets use hashes.", "Use no service password-encryption only if policy explicitly requires it; existing encoded values may remain encoded."),
-  step("local-user", "security", "global", "username netadmin privilege 15 secret L0calAdmin!", "Create a privileged local fallback administrator.", "A local account keeps emergency access possible when central authentication is unavailable.", "The username and privilege are IOS configuration values; the secret is case-sensitive. Production access should follow least privilege rather than assigning level 15 by default to every operator.", "Use show running-config | section username on a real lab, then test login through the intended line.", "Create and test a replacement account before using no username netadmin.", { sensitiveTokens: [5] }),
-  step("radius-context", "security", "global", "radius server RAD1", "Create the simulated RADIUS server profile RAD1.", "A named server profile groups the address and shared secret used to contact a central identity service.", "This simulator teaches the IOS configuration relationship; it does not send packets or authenticate against a real RADIUS server.", "Later, inspect the AAA and RADIUS configuration and test central authentication on an isolated lab image.", "Remove the AAA references first, then use no radius server RAD1.", { nextMode: "radius" }),
-  step("radius-address", "security", "radius", "address ipv4 192.168.50.10 auth-port 1812 acct-port 1813", "Set the RADIUS server address and standard authentication/accounting ports.", "The router needs an IPv4 destination and ports for authentication and accounting requests.", "192.168.50.10 is an easy-to-type private training address. Real deployments also need routing, source-interface policy and reachability to the server.", "Test IP reachability first, then use RADIUS test and debugging only under a controlled change plan.", "Use no address ipv4 192.168.50.10 to remove the endpoint from the profile."),
-  step("radius-key", "security", "radius", "key Rad1usLab!", "Set the case-sensitive RADIUS shared secret.", "The shared secret protects attributes exchanged between the network device and RADIUS server; both ends must match exactly.", "This is a simulated training value. Never reuse it in production or store a production RADIUS secret in this repository.", "On a real lab, a mismatched key appears as failed authentication even when IP connectivity works.", "Replace the key on both ends during a coordinated rotation.", { sensitiveTokens: [1] }),
-  step("exit-radius", "security", "radius", "exit", "Return to Global Configuration mode.", "The server profile is complete; AAA policy is configured at global scope.", "Reading the prompt prevents placing a valid command in the wrong configuration submode.", "Confirm the prompt ends (config)#.", "Re-enter with radius server RAD1.", { nextMode: "global" }),
-  step("aaa-new-model", "security", "global", "aaa new-model", "Enable the AAA policy framework.", "AAA separates authentication, authorisation and accounting policy from individual console or VTY lines.", "Enabling AAA can change access behaviour. Production changes require a tested fallback session and rollback plan to avoid lockout.", "Keep an existing privileged session open while testing a second login on a real lab.", "Use no aaa new-model only from a protected recovery path; removing AAA broadly changes access policy."),
-  step("aaa-login", "security", "global", "aaa authentication login default group radius local", "Use RADIUS first and the local database as fallback for login.", "The method list tries central authentication and can fall back to the local account when the server is unavailable.", "Fallback is for RADIUS unavailability, not necessarily for an explicit access rejection. Test the exact platform behaviour before production deployment.", "Test one valid RADIUS user, one local fallback during simulated server loss and one denied user.", "Replace the line authentication method before removing this method list."),
-  step("domain", "security", "global", "ip domain name lab.local", "Set the domain name required for RSA key generation.", "IOS uses the hostname and domain name when generating the SSH RSA key identity.", "The lab.local suffix is reserved here as an isolated teaching value; use the organisation's assigned domain in a real environment.", "Use show running-config | include domain on a real lab.", "Use no ip domain name lab.local only after planning the SSH key impact."),
-  step("rsa", "security", "global", "crypto key generate rsa modulus 2048", "Generate a 2048-bit RSA key for SSH.", "SSH needs a device key to identify the server and establish encrypted sessions.", "Key-generation support and recommended sizes vary by IOS XE release and security policy. This simulator records the configuration intent without creating a real key.", "Use show crypto key mypubkey rsa on a compatible real lab image.", "Use crypto key zeroize rsa only during a planned key replacement; it interrupts SSH."),
-  step("ssh-version", "security", "global", "ip ssh version 2", "Require SSH version 2.", "SSHv2 provides the modern protocol behaviour expected for encrypted remote administration.", "SSH protects the management channel; it does not replace AAA, source restrictions or secure key management.", "Use show ip ssh.", "Use no ip ssh version 2 only when deliberately returning to the platform default."),
-  step("vty", "security", "global", "line vty 0 4", "Open the first five virtual terminal lines.", "VTY line configuration controls inbound remote management sessions.", "The range 0–4 is common, but platforms can expose more lines. Audit and configure every available VTY range on the target device.", "Use show line and inspect every VTY range on a real lab.", "Use exit to leave line configuration; remove individual line commands with their no forms.", { nextMode: "line" }),
-  step("vty-auth", "security", "line", "login authentication default", "Apply the default AAA login method to VTY access.", "Defining a method list does nothing for these lines until the line references it.", "This links inbound SSH login to the RADIUS-first, local-fallback policy configured earlier.", "Test a second SSH session before closing the recovery session.", "Apply a known-good replacement method list before removing this reference."),
-  step("vty-transport", "security", "line", "transport input ssh", "Allow SSH and reject insecure inbound Telnet on these VTY lines.", "SSH encrypts credentials and session data; Telnet does not.", "This controls inbound protocols only. Reachability, ACLs and AAA still determine who can connect and authenticate.", "Use show running-config | section line vty and attempt an SSH connection on a real lab.", "Use transport input all only temporarily in an isolated recovery plan."),
-  step("exit-vty", "security", "line", "exit", "Return to Global Configuration mode.", "Line-specific remote-access controls are complete; services and interfaces belong to global or interface scope.", "The prompt is part of the command grammar. A correct keyword in the wrong mode is still the wrong operation.", "Confirm the prompt ends (config)#.", "Re-enter with line vty 0 4.", { nextMode: "global" }),
-  step("dns", "services", "global", "ip name-server 1.1.1.1", "Configure a DNS resolver address.", "The device can use a name server when an operator or feature needs hostname-to-address resolution.", "1.1.1.1 is easy to type for this isolated lesson. A real management network normally uses approved internal resolvers and controlled egress.", "Use show hosts and test an approved name on a connected real lab.", "Use no ip name-server 1.1.1.1."),
-];
+const definitionFrom = (content: LabContentDefinition): DeviceBuildDefinition => ({
+  id: content.id,
+  number: content.number,
+  shortTitle: content.id === "router-foundation" ? "Router foundation" : "Switch foundation",
+  title: content.title,
+  summary: content.summary,
+  deviceType: content.deviceProfile === "router-ios-xe" ? "router" : "switch",
+  deviceProfile: content.deviceProfile,
+  steps: content.steps.map(asStep),
+});
 
-const finishSteps = (device: "router" | "switch"): DeviceBuildStep[] => [
-  step("end", "verification", "global", "end", "Return to Privileged EXEC for verification.", "Operational show commands are normally run from an EXEC prompt after configuration is complete.", "The # prompt confirms configuration submode has ended.", "Confirm the prompt ends #.", "Use configure terminal to return to Global Configuration mode.", { nextMode: "privileged" }),
-  step("verify-ip", "verification", "privileged", "show ip interface brief", "Verify interface addresses and state in one concise table.", "This view quickly exposes missing addresses, administrative shutdowns and line-protocol faults.", "Read IP-Address, Status and Protocol as separate evidence. Up/up is healthy; administratively down means the interface is disabled by configuration.", "Compare every configured interface with the work order.", "This command is read-only; rollback is not required.", { output: device === "router" ? ["Interface              IP-Address      OK? Method Status                Protocol", "GigabitEthernet0/0/1   192.168.1.1     YES manual up                    up", "TenGigabitEthernet0/1/1 10.1.1.1       YES manual up                    up"] : ["Interface              IP-Address      OK? Method Status                Protocol", "Vlan99                 192.168.99.2    YES manual up                    up"] }),
-  step("verify-ssh", "verification", "privileged", "show ip ssh", "Verify the simulated SSH server settings.", "Configuration is not complete until the intended management service state is inspected.", "On a real device, check the enabled version, authentication settings and timeouts, then attempt a separate login.", "Confirm SSH version 2 is enabled.", "This command is read-only; correct the relevant global or line command if output is wrong.", { output: ["SSH Enabled - version 2.0", "Authentication methods: publickey,password,keyboard-interactive"] }),
-  step("save", "verification", "privileged", "copy running-config startup-config", "Save the verified running configuration.", "Running configuration is active now; startup configuration is what the device loads after a restart.", "Saving only after verification avoids preserving a known-bad state. It does not replace a versioned external configuration backup.", "Use show startup-config and compare critical sections with the running configuration.", "Restore a known-good configuration through an approved change and save again.", { output: ["Destination filename [startup-config]?", "Building configuration...", "[OK]"] }),
-];
+const staticDefinitions = new Map(labContentDefinitions.map((content) => [content.id, definitionFrom(content)]));
 
-const routerSteps: DeviceBuildStep[] = [
-  ...sharedOpening("BRANCH-R1"),
-  step("dhcp-excluded", "services", "global", "ip dhcp excluded-address 192.168.1.1 192.168.1.20", "Reserve infrastructure addresses so DHCP cannot lease them.", "The router address and a small static range must not be handed to clients.", "Exclusions are configured globally before the pool. Here .1–.20 remain available for the gateway, switches, access points or other fixed hosts.", "Use show running-config | include excluded-address.", "Use no ip dhcp excluded-address 192.168.1.1 192.168.1.20."),
-  step("dhcp-pool", "services", "global", "ip dhcp pool USERS", "Create the USERS DHCP pool.", "The pool groups the subnet and client options supplied to hosts.", "Entering DHCP pool mode changes the prompt to (dhcp-config)# and scopes subsequent commands to USERS.", "Use show ip dhcp pool after completing the pool.", "Use no ip dhcp pool USERS to remove the whole pool.", { nextMode: "dhcp" }),
-  step("dhcp-network", "services", "dhcp", "network 192.168.1.0 255.255.255.0", "Define the client subnet for the pool.", "The network statement tells the DHCP service which addresses belong to this pool.", "It identifies the network, not an individual host address. /24 is written as 255.255.255.0 in this command.", "Use show ip dhcp pool and confirm the network and utilisation.", "Use no network 192.168.1.0 255.255.255.0."),
-  step("dhcp-router", "services", "dhcp", "default-router 192.168.1.1", "Tell DHCP clients to use the router as their default gateway.", "Without a default-router option, clients can reach their local subnet but do not learn where to send remote traffic.", "The option must be an address reachable on the client subnet; it matches the LAN interface configured later.", "Inspect a simulated binding, then verify the leased client received 192.168.1.1 as its gateway.", "Use no default-router 192.168.1.1."),
-  step("dhcp-dns", "services", "dhcp", "dns-server 1.1.1.1", "Supply a DNS resolver to DHCP clients.", "Clients need a resolver address to translate hostnames into IP addresses.", "The router's own ip name-server and the DHCP client's dns-server option are separate settings.", "Inspect a client lease and perform an approved name lookup on a real lab.", "Use no dns-server 1.1.1.1."),
-  step("exit-dhcp", "services", "dhcp", "exit", "Return to Global Configuration mode.", "The DHCP pool is complete; physical interface configuration has a different scope.", "Prompt awareness prevents trying interface commands inside DHCP pool mode.", "Confirm the prompt ends (config)#.", "Re-enter with ip dhcp pool USERS.", { nextMode: "global" }),
-  step("lan-interface", "interfaces", "global", "interface gi0/0/1", "Open the GigabitEthernet LAN interface using its short form.", "gi is the unambiguous IOS abbreviation for GigabitEthernet on this simulated platform.", "Short interface names reduce typing while retaining slot/subslot/port identity. Real hardware numbering must be read from show ip interface brief.", "Confirm the prompt changes to (config-if)#.", "Use exit to leave the interface context.", { nextMode: "interface" }),
-  step("lan-description", "interfaces", "interface", "description USERS LAN", "Document the purpose of the LAN interface.", "Descriptions make diagrams, incident response and remote troubleshooting faster.", "Use a consistent description that identifies the connected service or peer without exposing sensitive information.", "Use show interfaces description.", "Use no description."),
-  step("lan-address", "interfaces", "interface", "ip address 192.168.1.1 255.255.255.0", "Assign the LAN gateway address.", "This address becomes the default gateway supplied to DHCP clients and installs a connected /24 route when the interface is operational.", "A connected route is derived from interface state; it is not the same configuration object as a static ip route command.", "Use show ip interface brief and show ip route connected.", "Use no ip address after dependent services have been moved."),
-  step("lan-up", "interfaces", "interface", "no shutdown", "Administratively enable the LAN interface.", "Router interfaces commonly begin administratively down. no shutdown removes that configured disable state.", "Operational up/up additionally depends on hardware, cabling and the far end; the command alone cannot prove link health.", "Use show ip interface brief and read both Status and Protocol.", "Use shutdown during an approved outage."),
-  step("exit-lan", "interfaces", "interface", "exit", "Return to Global Configuration mode.", "The LAN interface is complete and the uplink is a separate interface context.", "Each interface keeps its own address and administrative state.", "Confirm the prompt ends (config)#.", "Re-enter with interface gi0/0/1.", { nextMode: "global" }),
-  step("wan-interface", "interfaces", "global", "interface te0/1/1", "Open the TenGigabitEthernet uplink using its short form.", "te identifies a TenGigabitEthernet interface; the transceiver and cabling determine whether the physical medium is fibre or copper.", "Fibre describes media, not a generic IOS interface keyword. Always use the interface family shown by the platform.", "Confirm (config-if)# and the selected interface on a real lab with show interfaces description.", "Use exit to leave the interface context.", { nextMode: "interface" }),
-  step("wan-description", "interfaces", "interface", "description CORE UPLINK", "Document the uplink role.", "A useful description helps an engineer map the logical configuration to the physical path.", "CORE UPLINK is intentionally simple; a production standard might include the remote device and port.", "Use show interfaces description.", "Use no description."),
-  step("wan-address", "interfaces", "interface", "ip address 10.1.1.1 255.255.255.252", "Assign a small point-to-point uplink subnet.", "A /30 provides two usable IPv4 addresses, suitable for a simple training point-to-point link.", "10.1.1.1/30 has network 10.1.1.0, peer candidate 10.1.1.2 and broadcast 10.1.1.3.", "Use show ip interface brief and ping 10.1.1.2 on a connected lab.", "Use no ip address after routing has been migrated."),
-  step("wan-up", "interfaces", "interface", "no shutdown", "Administratively enable the uplink.", "The uplink cannot forward while it is administratively disabled.", "Use operational output to distinguish administrative state from fibre/transceiver/link faults.", "Use show ip interface brief and show interfaces te0/1/1.", "Use shutdown during an approved outage."),
-  step("exit-wan", "interfaces", "interface", "exit", "Return to Global Configuration mode.", "Both routed interfaces are now configured; verification belongs at Privileged EXEC.", "The running configuration is still unsaved until the final step.", "Confirm the prompt ends (config)#.", "Re-enter with interface te0/1/1.", { nextMode: "global" }),
-  ...finishSteps("router"),
-];
+export const deviceBuildLabs = [...staticDefinitions.values()];
+export const getDeviceBuildDefinition = (id: DeviceBuildLabId): DeviceBuildDefinition => staticDefinitions.get(id)!;
 
-const switchSteps: DeviceBuildStep[] = [
-  ...sharedOpening("ACCESS-SW1"),
-  step("vlan-users", "services", "global", "vlan 10", "Create VLAN 10 for user access ports.", "A VLAN creates a Layer 2 broadcast domain that access and trunk ports can reference.", "IOS keywords are case-insensitive: vlan 10, Vlan 10 and VLAN 10 express the same command. Cisco documentation conventionally shows lowercase.", "Use show vlan brief after naming and assigning access ports.", "Move dependent ports first, then use no vlan 10.", { nextMode: "vlan" }),
-  step("name-users", "services", "vlan", "name USERS", "Name VLAN 10 USERS.", "A descriptive VLAN name makes operational output easier to interpret than an ID alone.", "The name is a label; VLAN membership and forwarding still depend on the numeric VLAN ID.", "Use show vlan brief.", "Use no name or replace the name according to platform support."),
-  step("exit-users", "services", "vlan", "exit", "Return to Global Configuration mode.", "The user VLAN is complete; management uses a separate VLAN.", "The prompt confirms the scope of the next command.", "Confirm (config)#.", "Re-enter with vlan 10.", { nextMode: "global" }),
-  step("vlan-management", "services", "global", "vlan 99", "Create VLAN 99 for switch management.", "Separating management from user access reduces accidental exposure and supports policy boundaries.", "A management VLAN alone is not a security boundary; use ACLs, secure management transport and an isolated management design.", "Use show vlan brief.", "Move the management SVI and trunks before removing VLAN 99.", { nextMode: "vlan" }),
-  step("name-management", "services", "vlan", "name MANAGEMENT", "Name VLAN 99 MANAGEMENT.", "Clear labels help operators recognise the intended role during verification and incident response.", "The uppercase label is a chosen name, not a command-capitalisation requirement.", "Use show vlan brief.", "Use no name or replace it."),
-  step("exit-management", "services", "vlan", "exit", "Return to Global Configuration mode.", "VLAN definitions are complete; physical ports are configured in interface mode.", "The switch lab intentionally omits a DHCP server pool because endpoint address service is usually centralised elsewhere in this access-layer design.", "Confirm (config)#.", "Re-enter with vlan 99.", { nextMode: "global" }),
-  step("fast-access", "interfaces", "global", "interface fa0/0/1", "Open a FastEthernet user access port using fa.", "fa is the short IOS form for FastEthernet. It represents 100 Mb/s-era interfaces still found in older labs and equipment.", "Use the actual interface inventory for a target switch; short forms are only safe when unambiguous.", "Confirm (config-if)#.", "Use exit to leave the interface.", { nextMode: "interface" }),
-  step("access-mode", "interfaces", "interface", "switchport mode access", "Force the user port to operate as an access port.", "Static access mode prevents the port from negotiating a trunk and gives it one untagged data VLAN.", "This is appropriate for a normal endpoint-facing port, not an uplink carrying several VLANs.", "Use show interfaces fa0/0/1 switchport.", "Use no switchport mode access or configure the intended replacement mode."),
-  step("access-vlan", "interfaces", "interface", "switchport access vlan 10", "Place the access port in VLAN 10.", "Untagged endpoint traffic entering this port is associated with the USERS broadcast domain.", "The VLAN should exist before assignment so verification is predictable.", "Use show vlan brief and show interfaces fa0/0/1 switchport.", "Move the port to the replacement VLAN before removing VLAN 10."),
-  step("portfast", "interfaces", "interface", "spanning-tree portfast", "Enable PortFast for the endpoint-facing port.", "PortFast lets an edge port reach forwarding state quickly rather than waiting through normal STP transitions.", "Use it only where no switch or bridge can create a loop. PortFast does not disable spanning tree.", "Use show spanning-tree interface fa0/0/1 detail.", "Use no spanning-tree portfast."),
-  step("bpduguard", "interfaces", "interface", "spanning-tree bpduguard enable", "Shut the edge port if it receives a BPDU.", "BPDU Guard protects the topology from an unexpected switch connected to a PortFast edge port.", "A violation can err-disable the port, so monitoring and a recovery procedure are required.", "Use show spanning-tree interface fa0/0/1 detail and inspect err-disable status.", "Remove the cause, then follow the approved recovery process; no spanning-tree bpduguard enable removes the feature."),
-  step("access-up", "interfaces", "interface", "no shutdown", "Administratively enable the user port.", "The port must be enabled before a connected endpoint can establish link.", "Operational link still depends on cabling, NIC and speed/duplex compatibility.", "Use show interfaces status.", "Use shutdown during an approved isolation or maintenance action."),
-  step("exit-access", "interfaces", "interface", "exit", "Return to Global Configuration mode.", "The endpoint port is complete; the uplink needs trunk behaviour.", "A port's configuration remains scoped to that interface.", "Confirm (config)#.", "Re-enter with interface fa0/0/1.", { nextMode: "global" }),
-  step("trunk-interface", "interfaces", "global", "interface gi0/0/1", "Open the GigabitEthernet distribution uplink using gi.", "GigabitEthernet is a common copper or fibre access-switch uplink family depending on its transceiver and port design.", "The IOS interface keyword describes speed/family; the installed medium determines copper or fibre.", "Confirm (config-if)#.", "Use exit to leave the interface.", { nextMode: "interface" }),
-  step("trunk-mode", "interfaces", "interface", "switchport mode trunk", "Set the uplink to static trunk mode.", "A trunk carries tagged traffic for multiple VLANs between network devices.", "Static trunking makes the intended role explicit. Native-VLAN and encapsulation details depend on platform and design.", "Use show interfaces trunk.", "Move traffic safely before changing the port away from trunk mode."),
-  step("trunk-allowed", "interfaces", "interface", "switchport trunk allowed vlan 10,99", "Restrict the trunk to the user and management VLANs.", "An explicit allowed list reduces unnecessary Layer 2 propagation across the uplink.", "This command replaces the allowed list on many IOS platforms; add/remove forms are safer for incremental production changes.", "Use show interfaces trunk and confirm 10 and 99 are forwarding.", "Restore the approved previous list rather than blindly allowing all VLANs."),
-  step("trunk-up", "interfaces", "interface", "no shutdown", "Administratively enable the GigabitEthernet uplink.", "The trunk cannot carry VLAN traffic while disabled.", "Up/up does not prove that the allowed VLAN list or neighbour configuration is correct.", "Use show interfaces trunk and show interfaces status.", "Use shutdown only within a coordinated outage."),
-  step("exit-trunk", "interfaces", "interface", "exit", "Return to Global Configuration mode.", "The normal uplink is complete; the next step demonstrates a higher-speed fibre-capable interface family.", "Different Cisco platforms expose different port families and numbering.", "Confirm (config)#.", "Re-enter with interface gi0/0/1.", { nextMode: "global" }),
-  step("fibre-interface", "interfaces", "global", "interface fo0/1/1", "Open a FortyGigabitEthernet fibre uplink using fo.", "fo is the short form for FortyGigabitEthernet on platforms that provide it; such ports commonly use optical or direct-attach transceivers.", "There is no generic FiberEthernet IOS keyword. Fibre is the medium; FastEthernet, GigabitEthernet, TenGigabitEthernet and FortyGigabitEthernet are interface families.", "Use show interfaces status and hardware inventory on the named real platform.", "Use exit to leave the interface.", { nextMode: "interface" }),
-  step("fibre-description", "interfaces", "interface", "description FIBRE CORE UPLINK", "Document the fibre core uplink.", "The description lets an operator identify the role without tracing the cable first.", "A production label should include the remote device and port according to the site's standard.", "Use show interfaces description.", "Use no description."),
-  step("fibre-trunk", "interfaces", "interface", "switchport mode trunk", "Set the fibre uplink to trunk mode.", "The high-speed uplink can carry the switch's required VLANs towards the core.", "Speed and medium do not decide Layer 2 behaviour; the switchport configuration does.", "Use show interfaces trunk.", "Migrate traffic before changing the mode."),
-  step("fibre-allowed", "interfaces", "interface", "switchport trunk allowed vlan 10,99", "Allow only VLANs 10 and 99 on the fibre trunk.", "The explicit list keeps the lab's Layer 2 scope clear and verifiable.", "Both sides of a trunk must agree on which VLANs should traverse it.", "Use show interfaces trunk on both ends of a real lab.", "Restore the approved previous list."),
-  step("fibre-up", "interfaces", "interface", "no shutdown", "Administratively enable the fibre uplink.", "The interface must be enabled before optics and line protocol can establish.", "If it remains down, inspect transceiver support, light levels, cabling and the far-end configuration.", "Use show interfaces fo0/1/1 and platform transceiver diagnostics.", "Use shutdown during a coordinated outage."),
-  step("exit-fibre", "interfaces", "interface", "exit", "Return to Global Configuration mode.", "Physical switching ports are complete; the management SVI now needs its Layer 3 address.", "An SVI is a logical VLAN interface, not another physical fibre or copper port.", "Confirm (config)#.", "Re-enter with interface fo0/1/1.", { nextMode: "global" }),
-  step("management-svi", "interfaces", "global", "interface vlan 99", "Open the VLAN 99 switched virtual interface.", "The SVI gives this Layer 2 switch an IP endpoint for management.", "Its line protocol normally depends on VLAN 99 existing and having at least one active forwarding member on the platform.", "Confirm (config-if)#.", "Use exit to leave the SVI.", { nextMode: "interface" }),
-  step("management-ip", "interfaces", "interface", "ip address 192.168.99.2 255.255.255.0", "Assign the switch management address.", "Administrators and monitoring systems need a stable address to reach SSH and management services.", "192.168.99.2/24 is the switch; 192.168.99.1 will be the off-subnet gateway.", "Use show ip interface brief.", "Use no ip address after management has migrated."),
-  step("management-up", "interfaces", "interface", "no shutdown", "Administratively enable the management SVI.", "The logical interface must not be administratively disabled.", "An enabled SVI can still remain protocol-down if the VLAN has no active forwarding port.", "Use show ip interface brief and show vlan brief together.", "Use shutdown only with an alternate management path."),
-  step("exit-svi", "interfaces", "interface", "exit", "Return to Global Configuration mode.", "The SVI address is configured; a Layer 2 switch needs a default gateway for off-subnet management.", "This lab does not enable Layer 3 routing on the access switch.", "Confirm (config)#.", "Re-enter with interface vlan 99.", { nextMode: "global" }),
-  step("default-gateway", "interfaces", "global", "ip default-gateway 192.168.99.1", "Set the management default gateway.", "A Layer 2 switch uses this gateway to reply to management stations outside 192.168.99.0/24 when IP routing is disabled.", "On a multilayer switch with ip routing enabled, static or dynamic routing is used instead; ip default-gateway is not the routed equivalent.", "Ping 192.168.99.1, then test from an approved remote management subnet.", "Use no ip default-gateway 192.168.99.1 or replace it with the approved gateway."),
-  ...finishSteps("switch"),
-];
+const definitionForState = (state: Pick<DeviceBuildState, "labId" | "seed">): DeviceBuildDefinition =>
+  definitionFrom(createLabContent(state.labId, state.seed));
 
-const definitions: Record<DeviceBuildLabId, DeviceBuildDefinition> = {
-  "router-foundation": { id: "router-foundation", number: 2, shortTitle: "Router foundation", title: "Build a secure branch router from defaults", summary: "Identity, local fallback, simulated RADIUS, SSH, DNS, DHCP, routed interfaces, verification and save.", deviceType: "router", steps: routerSteps },
-  "switch-foundation": { id: "switch-foundation", number: 3, shortTitle: "Switch foundation", title: "Build a secure access switch from defaults", summary: "Identity, local fallback, simulated RADIUS, SSH, VLANs, edge security, copper and fibre uplinks, management, verification and save.", deviceType: "switch", steps: switchSteps },
-};
-
-export const deviceBuildLabs = Object.values(definitions);
-export const getDeviceBuildDefinition = (id: DeviceBuildLabId) => definitions[id];
-
-const applyPrior = (id: DeviceBuildLabId, stepIndex: number): DeviceBuildState => {
-  const definition = definitions[id];
-  let mode: DeviceBuildMode = "user";
-  let hostname = definition.deviceType === "router" ? "Router" : "Switch";
-  for (const completedStep of definition.steps.slice(0, stepIndex)) {
-    mode = completedStep.nextMode ?? mode;
-    hostname = completedStep.nextHostname ?? hostname;
+const sensitivePositions = (canonical: string): number[] => {
+  const tokens = canonical.trim().split(/\s+/u);
+  const positions: number[] = [];
+  for (let index = 1; index < tokens.length; index += 1) {
+    if (["secret", "password", "community", "key"].includes(tokens[index - 1].toLocaleLowerCase("en-GB"))) positions.push(index);
   }
-  return { version: 1, labId: id, stepIndex, mode, hostname, completed: stepIndex >= definition.steps.length };
+  return positions;
 };
 
-export const createDeviceBuildState = (id: DeviceBuildLabId): DeviceBuildState => applyPrior(id, 0);
+export interface DeviceBuildCommand extends RegistryCommand {
+  mode: CliContext;
+  kind: CommandKind;
+}
+
+const registryCommandFrom = (labId: DeviceBuildLabId, item: DeviceBuildStep): DeviceBuildCommand => ({
+  id: `lab.${labId}.${item.id}`,
+  mode: item.mode,
+  canonical: item.command,
+  objective: item.objective,
+  explanation: item.detail,
+  topic: "Guided lab",
+  difficulty: 1,
+  kind: item.nextMode ? "navigation" : /^(?:show|ping|ssh\s+-l)/iu.test(item.command) ? "verification" : "configuration",
+  caseSensitiveTokens: sensitivePositions(item.command),
+});
+
+export const deviceBuildCatalogue = (id: DeviceBuildLabId, seed = 1): DeviceBuildCommand[] =>
+  definitionFrom(createLabContent(id, seed)).steps.map((item) => registryCommandFrom(id, item));
+
+const fullCatalogueCache = new Map<string, RegistryCommand[]>();
+const fullCatalogue = (id: DeviceBuildLabId, seed: number): RegistryCommand[] => {
+  const cacheKey = `${id}:${seed}`;
+  const cached = fullCatalogueCache.get(cacheKey);
+  if (cached) return cached;
+  const byShape = new Map<string, RegistryCommand>();
+  for (const command of [...commands, ...deviceBuildCatalogue(id, seed)]) {
+    const key = `${command.mode}:${command.canonical.toLocaleLowerCase("en-GB")}`;
+    if (!byShape.has(key)) byShape.set(key, command);
+  }
+  const catalogue = [...byShape.values()];
+  fullCatalogueCache.set(cacheKey, catalogue);
+  return catalogue;
+};
+
+/** Read-only view used by UI teaching aids; parsing still happens here. */
+export const getDeviceBuildCatalogue = (state: Pick<DeviceBuildState, "labId" | "seed">): readonly RegistryCommand[] =>
+  fullCatalogue(state.labId, state.seed);
+
+const registryCache = new Map<string, CommandRegistry>();
+const registryFor = (id: DeviceBuildLabId, seed: number): CommandRegistry => {
+  const key = `${id}:${seed}`;
+  const cached = registryCache.get(key);
+  if (cached) return cached;
+  const definition = definitionFrom(createLabContent(id, seed));
+  const registry = buildCommandRegistry(
+    fullCatalogue(id, seed),
+    getDeviceProfile(definition.deviceProfile),
+    { includeSupplemental: true },
+  );
+  registryCache.set(key, registry);
+  return registry;
+};
+
+const cloneDevice = (device: DeviceState): DeviceState =>
+  JSON.parse(JSON.stringify(device)) as DeviceState;
+
+const clone = (state: DeviceBuildState): DeviceBuildState => ({
+  ...state,
+  effects: [...state.effects],
+  skippedSatisfiedStepIds: [...state.skippedSatisfiedStepIds],
+  runningConfiguration: [...state.runningConfiguration],
+  startupConfiguration: state.startupConfiguration ? [...state.startupConfiguration] : null,
+  device: cloneDevice(state.device),
+});
+
+const stableSeed = (seed: number): number =>
+  (Number.isFinite(seed) ? Math.trunc(seed) >>> 0 : 1) || 1;
+
+export const createDeviceBuildState = (id: DeviceBuildLabId, seed = 1): DeviceBuildState => {
+  const safeSeed = stableSeed(seed);
+  const content = createLabContent(id, safeSeed);
+  const device = initialDevice(content.deviceProfile);
+  device.hostname = content.initialHostname;
+
+  // The router exercise declares an already-cabled WAN /30. Seeding it here
+  // makes connected/default-route evidence and remote probes consequences of
+  // device state rather than authored output strings.
+  if (id === "router-foundation") {
+    const wan = device.interfaces["GigabitEthernet0/0/0"];
+    wan.ipv4 = "192.0.2.1";
+    wan.mask = "255.255.255.252";
+    wan.adminUp = true;
+    wan.carrierUp = true;
+    wan.touched = true;
+  }
+
+  return syncDerivedState({
+    version: 3,
+    seed: safeSeed,
+    labId: id,
+    stepIndex: 0,
+    mode: "user",
+    hostname: content.initialHostname,
+    completed: false,
+    effects: [],
+    skippedSatisfiedStepIds: [],
+    runningConfiguration: [],
+    startupConfiguration: null,
+    pendingConfirmation: null,
+    device,
+  });
+};
+
+const syncDerivedState = (state: DeviceBuildState): DeviceBuildState => {
+  const legacyRedaction = (line: string): string => line.replace(/\[configured\]/gu, "[redacted]");
+  state.mode = state.device.context as DeviceBuildMode;
+  state.hostname = state.device.hostname;
+  state.runningConfiguration = runningConfig(state.device).split("\n").map(legacyRedaction);
+  state.startupConfiguration = state.device.startup?.split("\n").map(legacyRedaction) ?? null;
+  const pending = state.device.pendingInteraction;
+  state.pendingConfirmation = pending?.kind === "save" ? "save-startup" : pending?.kind ?? null;
+  return state;
+};
+
+const executeShared = (state: DeviceBuildState, input: string): CliExecutionResult =>
+  executeCliCommand(
+    state.device,
+    input,
+    fullCatalogue(state.labId, state.seed) as unknown as readonly Command[],
+  );
+
+const applyCompletedPrefix = (
+  state: DeviceBuildState,
+  steps: readonly DeviceBuildStep[],
+  count: number,
+): DeviceBuildState => {
+  for (const item of steps.slice(0, count)) {
+    const execution = executeShared(state, item.command);
+    if (!execution.accepted) break;
+    state.device = execution.state;
+    if (state.device.pendingInteraction?.kind === "save") {
+      const confirmation = executeShared(state, "");
+      if (!confirmation.accepted) break;
+      state.device = confirmation.state;
+    }
+    if (!state.effects.includes(item.id)) state.effects.push(item.id);
+    state.stepIndex += 1;
+  }
+  state.completed = state.stepIndex >= steps.length;
+  return syncDerivedState(state);
+};
+
+const oldTotals: Readonly<Record<DeviceBuildLabId, number>> = {
+  "router-foundation": 40,
+  "switch-foundation": 53,
+};
+
+const oldToNew: Readonly<Record<string, string>> = {
+  configure: "configure-terminal",
+  "local-user": "local-admin",
+  "radius-context": "radius-server",
+  "exit-radius": "leave-radius",
+  domain: "domain-name",
+  rsa: "rsa-key",
+  vty: "vty-lines",
+  "vty-auth": "vty-login",
+  "vty-transport": "vty-ssh-only",
+  "exit-vty": "leave-vty",
+  "dhcp-excluded": "dhcp-exclusion",
+  "dhcp-router": "dhcp-gateway",
+  "exit-dhcp": "leave-dhcp",
+  "lan-up": "lan-enable",
+  "exit-lan": "leave-lan",
+  "vlan-users": "vlan10",
+  "name-users": "vlan10-name",
+  "exit-users": "leave-vlan10",
+  "vlan-management": "vlan99",
+  "name-management": "vlan99-name",
+  "exit-management": "leave-vlan99",
+  "management-ip": "management-address",
+  "management-up": "management-enable",
+  "exit-svi": "leave-management-svi",
+  "default-gateway": "management-gateway",
+};
+
+const oldStepIds: Readonly<Record<DeviceBuildLabId, readonly string[]>> = {
+  "router-foundation": ["enable", "configure", "hostname", "enable-secret", "password-encryption", "local-user", "radius-context", "radius-address", "radius-key", "exit-radius", "aaa-new-model", "aaa-login", "domain", "rsa", "ssh-version", "vty", "vty-auth", "vty-transport", "exit-vty", "dns", "dhcp-excluded", "dhcp-pool", "dhcp-network", "dhcp-router", "dhcp-dns", "exit-dhcp", "lan-interface", "lan-description", "lan-address", "lan-up", "exit-lan", "wan-interface", "wan-description", "wan-address", "wan-up", "exit-wan", "end", "verify-ip", "verify-ssh", "save"],
+  "switch-foundation": ["enable", "configure", "hostname", "enable-secret", "password-encryption", "local-user", "radius-context", "radius-address", "radius-key", "exit-radius", "aaa-new-model", "aaa-login", "domain", "rsa", "ssh-version", "vty", "vty-auth", "vty-transport", "exit-vty", "dns", "vlan-users", "name-users", "exit-users", "vlan-management", "name-management", "exit-management", "fast-access", "access-mode", "access-vlan", "portfast", "bpduguard", "access-up", "exit-access", "trunk-interface", "trunk-mode", "trunk-allowed", "trunk-up", "exit-trunk", "fibre-interface", "fibre-description", "fibre-trunk", "fibre-allowed", "fibre-up", "exit-fibre", "management-svi", "management-ip", "management-up", "exit-svi", "default-gateway", "end", "verify-ip", "verify-ssh", "save"],
+};
+
+const migrateVersionOne = (saved: Record<string, unknown>): DeviceBuildState | null => {
+  const id = saved.labId;
+  if (id !== "router-foundation" && id !== "switch-foundation") return null;
+  if (!Number.isInteger(saved.stepIndex) || (saved.stepIndex as number) < 0 || (saved.stepIndex as number) > oldTotals[id]) return null;
+  const completedOldIds = new Set(oldStepIds[id].slice(0, saved.stepIndex as number).map((oldId) => oldToNew[oldId] ?? oldId));
+  const state = createDeviceBuildState(id);
+  const definition = definitionForState(state);
+  let prefix = 0;
+  while (prefix < definition.steps.length && completedOldIds.has(definition.steps[prefix].id)) prefix += 1;
+  return applyCompletedPrefix(state, definition.steps, prefix);
+};
+
+const safeStringArray = (value: unknown, limit: number): value is string[] =>
+  Array.isArray(value)
+  && value.length <= limit
+  && value.every((item) => typeof item === "string" && item.length <= 512);
+
+const containsUnredactedSecret = (lines: readonly string[]): boolean =>
+  lines.some((line) =>
+    /\b(?:secret|password|community)\s+(?!\[(?:redacted|configured)\])\S+/iu.test(line)
+    || /(?:^|\s)key\s+(?!(?:generate|zeroize)\b|\[(?:redacted|configured)\])\S+/iu.test(line));
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+const validRecordSize = (value: unknown, limit: number): value is Record<string, unknown> =>
+  isRecord(value) && Object.keys(value).length <= limit;
+
+const serialisedWithin = (value: unknown, limit: number): string | null => {
+  try {
+    const serialised = JSON.stringify(value);
+    return serialised.length <= limit ? serialised : null;
+  } catch {
+    return null;
+  }
+};
+
+const validPendingInteraction = (value: unknown): boolean => {
+  if (value === null) return true;
+  if (!isRecord(value) || typeof value.kind !== "string") return false;
+  if (value.kind === "save") return value.destination === "startup-config";
+  if (value.kind === "default-interface") {
+    return typeof value.interfaceName === "string" && value.interfaceName.length >= 1 && value.interfaceName.length <= 64;
+  }
+  return value.kind === "reload" || value.kind === "erase-startup";
+};
+
+const pendingConfirmationFor = (pending: PendingInteraction | null): DeviceBuildPendingConfirmation =>
+  pending?.kind === "save" ? "save-startup" : pending?.kind ?? null;
+
+const nullableString = (value: unknown, limit = 256): boolean =>
+  value === null || (typeof value === "string" && value.length <= limit);
+
+const nullableFiniteNumber = (value: unknown): boolean =>
+  value === null || (typeof value === "number" && Number.isFinite(value));
+
+const validInterfaceStateRecord = (value: Record<string, unknown>): boolean =>
+  Object.entries(value).every(([name, candidate]) => {
+    if (!isRecord(candidate) || candidate.name !== name || name.length > 64) return false;
+    return typeof candidate.description === "string" && candidate.description.length <= 256
+      && nullableString(candidate.ipv4, 45) && nullableString(candidate.mask, 45)
+      && typeof candidate.adminUp === "boolean" && typeof candidate.carrierUp === "boolean"
+      && nullableFiniteNumber(candidate.encapsulationDot1q)
+      && (candidate.switchportMode === null || candidate.switchportMode === "access" || candidate.switchportMode === "trunk")
+      && nullableFiniteNumber(candidate.accessVlan) && nullableFiniteNumber(candidate.voiceVlan)
+      && nullableFiniteNumber(candidate.trunkNativeVlan)
+      && Array.isArray(candidate.trunkAllowedVlans) && candidate.trunkAllowedVlans.length <= 4094
+      && candidate.trunkAllowedVlans.every((id) => Number.isInteger(id) && id >= 1 && id <= 4094)
+      && typeof candidate.portFast === "boolean" && typeof candidate.bpduGuard === "boolean"
+      && typeof candidate.portSecurity === "boolean" && nullableFiniteNumber(candidate.portSecurityMaximum)
+      && nullableString(candidate.portSecurityViolation, 32)
+      && nullableFiniteNumber(candidate.channelGroup) && nullableString(candidate.channelMode, 32)
+      && nullableString(candidate.helperAddress, 45) && nullableString(candidate.natRole, 16)
+      && nullableFiniteNumber(candidate.bandwidthKbps) && nullableFiniteNumber(candidate.loadIntervalSeconds)
+      && typeof candidate.negotiationAuto === "boolean" && nullableString(candidate.stormControlBroadcastLevel, 32)
+      && typeof candidate.udldPort === "boolean" && nullableFiniteNumber(candidate.dhcpSnoopingRate)
+      && typeof candidate.touched === "boolean";
+  });
+
+const validStringArrayMap = (value: Record<string, unknown>, itemLimit = 256): boolean =>
+  Object.values(value).every((items) => safeStringArray(items, itemLimit));
+
+const validDeviceObjects = (value: Record<string, unknown>): boolean => {
+  const interfaces = value.interfaces as Record<string, unknown>;
+  const vlans = value.vlans as Record<string, unknown>;
+  const users = value.users as Record<string, unknown>;
+  const radiusServers = value.radiusServers as Record<string, unknown>;
+  const dhcpPools = value.dhcpPools as Record<string, unknown>;
+  return validInterfaceStateRecord(interfaces)
+    && typeof interfaces[value.selectedInterface as string] === "object"
+    && Object.values(vlans).every((vlan) => isRecord(vlan)
+      && Number.isInteger(vlan.id) && typeof vlan.name === "string" && vlan.name.length <= 64
+      && typeof vlan.active === "boolean")
+    && Object.values(users).every((user) => isRecord(user)
+      && Number.isInteger(user.privilege) && typeof user.secretConfigured === "boolean")
+    && Object.values(radiusServers).every((server) => isRecord(server)
+      && typeof server.name === "string" && nullableString(server.address, 45)
+      && Number.isInteger(server.authenticationPort) && Number.isInteger(server.accountingPort)
+      && typeof server.keyConfigured === "boolean" && typeof server.administrativelyDisabled === "boolean")
+    && Object.values(dhcpPools).every((pool) => isRecord(pool)
+      && typeof pool.name === "string" && nullableString(pool.network, 45) && nullableString(pool.mask, 45)
+      && nullableString(pool.defaultRouter, 45) && nullableString(pool.dnsServer, 45)
+      && nullableString(pool.domainName, 255))
+    && validStringArrayMap(value.aaaGroups as Record<string, unknown>, 32)
+    && validStringArrayMap(value.lineSettings as Record<string, unknown>)
+    && validStringArrayMap(value.aclEntries as Record<string, unknown>)
+    && validStringArrayMap(value.ospfProcesses as Record<string, unknown>);
+};
+
+const validDeviceState = (
+  value: unknown,
+  definition: DeviceBuildDefinition,
+): value is DeviceState => {
+  if (!restoreDeviceState(value, definition.deviceProfile)) return false;
+  if (!isRecord(value) || value.profileId !== definition.deviceProfile) return false;
+  if (typeof value.hostname !== "string" || !/^[A-Za-z0-9-]{1,63}$/u.test(value.hostname)) return false;
+  if (typeof value.context !== "string" || !Object.hasOwn(modeNames, value.context)) return false;
+  if (typeof value.selectedInterface !== "string" || value.selectedInterface.length > 64) return false;
+  if (!safeStringArray(value.selectedInterfaces, 64) || !safeStringArray(value.routes, 256)
+    || !safeStringArray(value.nameServers, 16) || !safeStringArray(value.aaaLoginMethods, 32)
+    || !safeStringArray(value.aaaAuthorisationMethods, 32)
+    || !safeStringArray(value.appliedConfiguration, 512)) return false;
+  if (!Array.isArray(value.staticRoutes) || value.staticRoutes.length > 128
+    || !Array.isArray(value.dhcpExcluded) || value.dhcpExcluded.length > 128) return false;
+  if (!validRecordSize(value.interfaces, 128) || !validRecordSize(value.vlans, 4094)
+    || !validRecordSize(value.users, 64) || !validRecordSize(value.radiusServers, 32)
+    || !validRecordSize(value.aaaGroups, 32) || !validRecordSize(value.lineSettings, 64)
+    || !validRecordSize(value.dhcpPools, 64) || !validRecordSize(value.aclEntries, 128)
+    || !validRecordSize(value.ospfProcesses, 64)) return false;
+  if (!validDeviceObjects(value)) return false;
+  if (!value.staticRoutes.every((route) => isRecord(route)
+    && typeof route.destination === "string" && typeof route.mask === "string"
+    && typeof route.nextHop === "string" && nullableFiniteNumber(route.administrativeDistance))) return false;
+  if (!value.dhcpExcluded.every((range) => isRecord(range)
+    && typeof range.start === "string" && typeof range.end === "string")) return false;
+  if (typeof value.enableSecretConfigured !== "boolean" || typeof value.passwordEncryption !== "boolean"
+    || typeof value.aaaNewModel !== "boolean" || !nullableFiniteNumber(value.rsaKeyBits)
+    || !nullableFiniteNumber(value.sshVersion) || !nullableString(value.defaultGateway, 45)
+    || !nullableString(value.domainName, 255)) return false;
+  if (!validPendingInteraction(value.pendingInteraction)) return false;
+  if (value.startup !== null && (typeof value.startup !== "string" || value.startup.length > 131_072)) return false;
+  if (value.startupSnapshot !== null && (typeof value.startupSnapshot !== "string" || value.startupSnapshot.length > 262_144)) return false;
+  if (value.recoveryCheckpoint !== null && (typeof value.recoveryCheckpoint !== "string" || value.recoveryCheckpoint.length > 262_144)) return false;
+
+  const serialised = serialisedWithin(value, 524_288);
+  if (!serialised) return false;
+  const sensitiveValues = definition.steps.filter((step) => step.sensitiveArgumentNames?.length).flatMap((step) => {
+    const tokens = step.command.trim().split(/\s+/u);
+    return sensitivePositions(step.command).map((index) => tokens[index]).filter(Boolean);
+  });
+  if (sensitiveValues.some((secret) => serialised.includes(secret))) return false;
+  return !containsUnredactedSecret([
+    ...(value.appliedConfiguration as string[]),
+    ...(typeof value.startup === "string" ? value.startup.split("\n") : []),
+  ]);
+};
+
+interface LegacyDeviceBuildStateV2 {
+  version: 2;
+  seed: number;
+  labId: DeviceBuildLabId;
+  stepIndex: number;
+  mode: DeviceBuildMode;
+  hostname: string;
+  completed: boolean;
+  effects: string[];
+  skippedSatisfiedStepIds: string[];
+  runningConfiguration: string[];
+  startupConfiguration: string[] | null;
+  pendingConfirmation: "save-startup" | null;
+}
+
+const migrateVersionTwo = (saved: LegacyDeviceBuildStateV2): DeviceBuildState | null => {
+  const baseline = createDeviceBuildState(saved.labId, saved.seed);
+  const definition = definitionForState(baseline);
+  if (!Number.isInteger(saved.stepIndex) || saved.stepIndex < 0 || saved.stepIndex > definition.steps.length) return null;
+  if (typeof saved.mode !== "string" || !Object.hasOwn(modeNames, saved.mode)) return null;
+  if (typeof saved.hostname !== "string" || saved.hostname.length < 1 || saved.hostname.length > 63) return null;
+  if (typeof saved.completed !== "boolean") return null;
+  if (!safeStringArray(saved.effects, definition.steps.length)
+    || !safeStringArray(saved.skippedSatisfiedStepIds, definition.steps.length)
+    || !safeStringArray(saved.runningConfiguration, 256)
+    || (saved.startupConfiguration !== null && !safeStringArray(saved.startupConfiguration, 256))
+    || containsUnredactedSecret(saved.runningConfiguration)
+    || (saved.startupConfiguration && containsUnredactedSecret(saved.startupConfiguration))) return null;
+  if (saved.pendingConfirmation !== null && saved.pendingConfirmation !== "save-startup") return null;
+  const known = new Set(definition.steps.map((item) => item.id));
+  if (saved.effects.some((id) => !known.has(id)) || saved.skippedSatisfiedStepIds.some((id) => !known.has(id))) return null;
+
+  const completedIds = new Set(saved.effects);
+  let prefix = 0;
+  while (prefix < definition.steps.length && completedIds.has(definition.steps[prefix].id)) prefix += 1;
+  const migrated = applyCompletedPrefix(baseline, definition.steps, prefix);
+  if (saved.pendingConfirmation === "save-startup" && definition.steps[migrated.stepIndex]?.command === "copy running-config startup-config") {
+    const pending = executeShared(migrated, definition.steps[migrated.stepIndex].command);
+    if (pending.accepted) migrated.device = pending.state;
+  }
+  return syncDerivedState(migrated);
+};
 
 export const restoreDeviceBuildState = (value: unknown): DeviceBuildState | null => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const saved = value as Partial<DeviceBuildState>;
-  if (saved.version !== 1 || (saved.labId !== "router-foundation" && saved.labId !== "switch-foundation")) return null;
-  const definition = definitions[saved.labId];
+  const record = value as Record<string, unknown>;
+  if (record.version === 1) return migrateVersionOne(record);
+  if (record.version === 2) {
+    if (record.labId !== "router-foundation" && record.labId !== "switch-foundation") return null;
+    return migrateVersionTwo(record as unknown as LegacyDeviceBuildStateV2);
+  }
+  const saved = record as Partial<DeviceBuildState> & Record<string, unknown>;
+  if (saved.version !== 3 || (saved.labId !== "router-foundation" && saved.labId !== "switch-foundation")) return null;
+  if (typeof saved.seed !== "number") return null;
+  const baseline = createDeviceBuildState(saved.labId, saved.seed);
+  const definition = definitionForState(baseline);
   if (!Number.isInteger(saved.stepIndex) || (saved.stepIndex as number) < 0 || (saved.stepIndex as number) > definition.steps.length) return null;
-  const rebuilt = applyPrior(saved.labId, saved.stepIndex as number);
-  if (saved.mode !== rebuilt.mode || saved.hostname !== rebuilt.hostname || saved.completed !== rebuilt.completed) return null;
-  return rebuilt;
+  if (typeof saved.mode !== "string" || !Object.hasOwn(modeNames, saved.mode)) return null;
+  if (typeof saved.hostname !== "string" || saved.hostname.length < 1 || saved.hostname.length > 63) return null;
+  if (typeof saved.completed !== "boolean" || saved.completed !== ((saved.stepIndex as number) >= definition.steps.length)) return null;
+  if (!safeStringArray(saved.effects, definition.steps.length)
+    || !safeStringArray(saved.skippedSatisfiedStepIds, definition.steps.length)
+    || !safeStringArray(saved.runningConfiguration, 256)
+    || (saved.startupConfiguration !== null && !safeStringArray(saved.startupConfiguration, 256))
+    || containsUnredactedSecret(saved.runningConfiguration)
+    || (saved.startupConfiguration && containsUnredactedSecret(saved.startupConfiguration))) return null;
+  if (![null, "save-startup", "reload", "erase-startup", "default-interface"].includes(
+    saved.pendingConfirmation as DeviceBuildPendingConfirmation,
+  )) return null;
+  if (!validDeviceState(saved.device, definition)) return null;
+  const restoredDevice = restoreDeviceState(saved.device, definition.deviceProfile);
+  if (!restoredDevice) return null;
+  const known = new Set(definition.steps.map((item) => item.id));
+  if (saved.effects.some((id) => !known.has(id)) || saved.skippedSatisfiedStepIds.some((id) => !known.has(id))) return null;
+  const device = cloneDevice(restoredDevice);
+  // Keep the historical keyboard-navigation mirror compatible, but never use
+  // it to erase an authoritative interaction. Pending state must round-trip
+  // exactly so reload/erase/default prompts cannot disappear on page reload.
+  device.context = saved.mode as CliContext;
+  if (device.hostname !== saved.hostname) return null;
+  if (saved.pendingConfirmation !== pendingConfirmationFor(device.pendingInteraction)) return null;
+  if (device.pendingInteraction?.kind === "default-interface"
+    && !Object.hasOwn(device.interfaces, device.pendingInteraction.interfaceName)) return null;
+  return syncDerivedState({
+    version: 3,
+    seed: baseline.seed,
+    labId: saved.labId,
+    stepIndex: saved.stepIndex as number,
+    mode: saved.mode as DeviceBuildMode,
+    hostname: saved.hostname,
+    completed: saved.completed,
+    effects: [...saved.effects],
+    skippedSatisfiedStepIds: [...saved.skippedSatisfiedStepIds],
+    runningConfiguration: [...saved.runningConfiguration],
+    startupConfiguration: saved.startupConfiguration ? [...saved.startupConfiguration] : null,
+    pendingConfirmation: saved.pendingConfirmation,
+    device,
+  });
 };
 
-export const deviceBuildPrompt = (state: DeviceBuildState) => {
-  switch (state.mode) {
-    case "user": return `${state.hostname}>`;
-    case "privileged": return `${state.hostname}#`;
-    case "global": return `${state.hostname}(config)#`;
-    case "line": return `${state.hostname}(config-line)#`;
-    case "interface": return `${state.hostname}(config-if)#`;
-    case "radius": return `${state.hostname}(config-radius-server)#`;
-    case "dhcp": return `${state.hostname}(dhcp-config)#`;
-    case "vlan": return `${state.hostname}(config-vlan)#`;
+export const deviceBuildPrompt = (state: DeviceBuildState): string => prompt({
+  ...state.device,
+  hostname: state.hostname,
+  context: state.mode,
+});
+
+export const getDeviceBuildStep = (state: DeviceBuildState): DeviceBuildStep | null =>
+  definitionForState(state).steps[state.stepIndex] ?? null;
+
+const eventArguments = (event: ParsedCommandEvent): Array<{ value: string; caseSensitive: boolean }> =>
+  event.production.tokens.flatMap((token) => token.kind === "argument"
+    ? [{ value: event.normalisedArguments[token.name] ?? "", caseSensitive: token.caseSensitive }]
+    : []);
+
+const sameEventMeaning = (actual: ParsedCommandEvent, expected: ParsedCommandEvent): boolean => {
+  if (actual.production.signature !== expected.production.signature) return false;
+  const actualArgs = eventArguments(actual);
+  const expectedArgs = eventArguments(expected);
+  if (actualArgs.length !== expectedArgs.length) return false;
+  return expectedArgs.every((expectedArg, index) => expectedArg.caseSensitive
+    ? actualArgs[index].value === expectedArg.value
+    : actualArgs[index].value.toLocaleLowerCase("en-GB") === expectedArg.value.toLocaleLowerCase("en-GB"));
+};
+
+const saveAlternative = (event: ParsedCommandEvent, step: DeviceBuildStep): boolean =>
+  /^copy running-config startup-config$/iu.test(step.command)
+  && /^(?:write(?: memory)?|copy running-config startup-config)$/iu.test(event.canonicalInput);
+
+const expectedEventCache = new WeakMap<CommandRegistry, Map<string, ParsedCommandEvent>>();
+
+const expectedEvent = (
+  registry: CommandRegistry,
+  step: DeviceBuildStep,
+): ParsedCommandEvent => {
+  const cache = expectedEventCache.get(registry) ?? new Map<string, ParsedCommandEvent>();
+  expectedEventCache.set(registry, cache);
+  const cached = cache.get(step.id);
+  if (cached) return cached;
+  const parsed = parseRegistryInput(registry, step.command, step.mode);
+  if (parsed.status !== "valid") throw new Error(`Lab command is not registered: ${step.id} (${parsed.status})`);
+  cache.set(step.id, parsed.event);
+  return parsed.event;
+};
+
+const eventMatchesStep = (
+  registry: CommandRegistry,
+  event: ParsedCommandEvent,
+  step: DeviceBuildStep,
+): boolean => saveAlternative(event, step) || sameEventMeaning(event, expectedEvent(registry, step));
+
+const stepMatchingEvent = (
+  definition: DeviceBuildDefinition,
+  registry: CommandRegistry,
+  event: ParsedCommandEvent,
+): DeviceBuildStep | null => definition.steps.find((candidate) =>
+  candidate.mode === event.context && eventMatchesStep(registry, event, candidate)) ?? null;
+
+const interfaceReady = (device: DeviceState, name: string): boolean => {
+  const item = device.interfaces[name];
+  return Boolean(item?.adminUp && item.carrierUp);
+};
+
+const radiusAdministrativelyDisabled = (device: DeviceState): boolean =>
+  Object.values(device.radiusServers).some((server) =>
+    (server as typeof server & { administrativelyDisabled?: boolean }).administrativelyDisabled === true);
+
+const radiusModelsAdministrativeState = (device: DeviceState): boolean =>
+  Object.values(device.radiusServers).some((server) => Object.hasOwn(server, "administrativelyDisabled"));
+
+const allInterfaces = (
+  device: DeviceState,
+  names: readonly string[],
+  predicate: (item: DeviceState["interfaces"][string]) => boolean,
+): boolean => names.every((name) => Boolean(device.interfaces[name]) && predicate(device.interfaces[name]));
+
+/**
+ * Syntax identifies the requested task; this guard proves that the shared
+ * simulator actually produced the state/evidence the task claims to verify.
+ */
+const executionSatisfiesStep = (
+  step: DeviceBuildStep,
+  execution: CliExecutionResult,
+): boolean => {
+  if (!execution.accepted) return false;
+  const device = execution.state;
+  const output = execution.output.join("\n");
+  const vlanNamed = (id: number, name: string): boolean =>
+    device.vlans[id]?.active === true && device.vlans[id]?.name === name;
+  const defaultRoute = device.staticRoutes.some((route) =>
+    route.destination === "0.0.0.0" && route.mask === "0.0.0.0" && route.nextHop === "192.0.2.2");
+  const usersPool = device.dhcpPools.USERS;
+
+  switch (step.id) {
+    case "verify-interfaces":
+      return interfaceReady(device, "GigabitEthernet0/0/0")
+        && interfaceReady(device, "GigabitEthernet0/0/1")
+        && device.interfaces["GigabitEthernet0/0/0"]?.ipv4 === "192.0.2.1"
+        && device.interfaces["GigabitEthernet0/0/1"]?.ipv4 === "192.168.10.1";
+    case "verify-routes":
+      return defaultRoute && /0\.0\.0\.0\/0|candidate default/iu.test(output);
+    case "verify-dhcp-pool":
+      return usersPool?.network === "192.168.10.0"
+        && usersPool.mask === "255.255.255.0"
+        && usersPool.defaultRouter === "192.168.10.1"
+        && usersPool.dnsServer === "192.0.2.53"
+        && /Pool USERS/iu.test(output);
+    case "verify-dhcp-binding":
+      return Boolean(usersPool?.network && usersPool.mask)
+        && /192\.168\.10\.21/iu.test(output)
+        && !/No DHCP bindings/iu.test(output);
+    case "verify-aaa-ready":
+      return !radiusAdministrativelyDisabled(device)
+        && Object.values(device.radiusServers).some((server) => Boolean(server.address && server.keyConfigured))
+        && /State: UP/iu.test(output);
+    case "verify-central-login":
+      return !radiusAdministrativelyDisabled(device)
+        && Object.values(device.radiusServers).some((server) => Boolean(server.address && server.keyConfigured))
+        && /(?:RADIUS|central).*(?:accepted|success)/iu.test(output);
+    case "simulate-radius-outage":
+      return radiusAdministrativelyDisabled(device);
+    case "verify-aaa":
+      return (!radiusModelsAdministrativeState(device) || radiusAdministrativelyDisabled(device))
+        && /(?:DEAD|unavailable|disabled|no response)/iu.test(output);
+    case "verify-fallback":
+      return (!radiusModelsAdministrativeState(device) || radiusAdministrativelyDisabled(device))
+        && Boolean(device.users.localadmin)
+        && device.aaaLoginMethods.some((method) => / group \S+ local$/iu.test(method))
+        && /local fallback.*accepted|accepted.*local/iu.test(output);
+    case "verify-ssh":
+      return device.sshVersion === 2 && device.rsaKeyBits === 2048 && /SSH Enabled - version 2/iu.test(output);
+    case "test-lan":
+    case "test-remote":
+    case "test-management-gateway":
+      return /Success rate is 100 percent \(5\/5\)/iu.test(output);
+    case "verify-vlans":
+    case "verify-vlan-membership":
+      return vlanNamed(10, "DATA") && vlanNamed(20, "VOICE") && vlanNamed(99, "MANAGEMENT")
+        && /10\s+DATA/iu.test(output) && /20\s+VOICE/iu.test(output) && /99\s+MANAGEMENT/iu.test(output);
+    case "verify-interface-status":
+      return allInterfaces(device, ["FastEthernet1/0/1", "FastEthernet1/0/4", "FastEthernet1/0/5", "FastEthernet1/0/8"], (item) => item.adminUp)
+        && allInterfaces(device, ["FastEthernet1/0/9", "FastEthernet1/0/24"], (item) => !item.adminUp)
+        && /FastEthernet1\/0\/1\s+connected/iu.test(output)
+        && /FastEthernet1\/0\/9\s+disabled/iu.test(output);
+    case "verify-trunk": {
+      const channel = device.interfaces["Port-channel1"];
+      return channel?.adminUp === true && channel.switchportMode === "trunk"
+        && [10, 20, 99].every((id) => channel.trunkAllowedVlans.includes(id))
+        && /Port-channel1.*10,20,99/iu.test(output);
+    }
+    case "verify-spanning-tree":
+      return [10, 20, 99].every((id) => Boolean(device.vlans[id]?.active))
+        && /VLAN0010/iu.test(output) && /Port-channel1/iu.test(output);
+    case "verify-port-security":
+      return allInterfaces(
+        device,
+        Array.from({ length: 8 }, (_, index) => `FastEthernet1/0/${index + 1}`),
+        (item) => item.portSecurity && item.portSecurityMaximum === 2 && item.portSecurityViolation === "restrict",
+      ) && /Maximum 2 Violation restrict/iu.test(output);
+    case "verify-etherchannel":
+      return allInterfaces(device, ["TenGigabitEthernet1/1/1", "TenGigabitEthernet1/1/2"], (item) =>
+        item.channelGroup === 1 && item.channelMode === "active")
+        && /TenGigabitEthernet1\/1\/1/iu.test(output)
+        && /TenGigabitEthernet1\/1\/2/iu.test(output);
+    case "save":
+    case "save-switch":
+      return device.pendingInteraction === null && device.startup !== null;
+    case "verify-startup":
+    case "verify-switch-startup":
+      return device.startup !== null && output === device.startup;
+    default:
+      return true;
   }
 };
 
-export const getDeviceBuildStep = (state: DeviceBuildState) => definitions[state.labId].steps[state.stepIndex] ?? null;
-
-const tokenise = (input: string) => input.trim().split(/\s+/u);
-
-const commandMatches = (input: string, expected: string, sensitiveTokens: number[] = []) => {
-  const actualTokens = tokenise(input);
-  const expectedTokens = tokenise(expected);
-  if (actualTokens.length !== expectedTokens.length) return false;
-  return expectedTokens.every((token, index) => sensitiveTokens.includes(index)
-    ? actualTokens[index] === token
-    : actualTokens[index]?.toLocaleLowerCase("en-GB") === token.toLocaleLowerCase("en-GB"));
+const advanceAfterCompletion = (
+  state: DeviceBuildState,
+  definition: DeviceBuildDefinition,
+): string[] => {
+  state.stepIndex += 1;
+  const skipped: string[] = [];
+  while (state.stepIndex < definition.steps.length) {
+    const next = definition.steps[state.stepIndex];
+    if (!state.effects.includes(next.id)) break;
+    skipped.push(next.id);
+    state.skippedSatisfiedStepIds.push(next.id);
+    state.stepIndex += 1;
+  }
+  state.completed = state.stepIndex >= definition.steps.length;
+  return skipped;
 };
 
-export const runDeviceBuildCommand = (state: DeviceBuildState, input: string): DeviceBuildResult => {
-  const current = restoreDeviceBuildState(state);
-  if (!current) throw new Error("Invalid device build state");
-  const lesson = getDeviceBuildStep(current);
-  if (!lesson) return { accepted: false, state: current, output: [], explanation: "This guided build is already complete.", useCase: "Review the completed build or restart it from the Labs list.", verification: "All lesson steps have been accepted.", rollback: "Restart only when you want to clear this saved lab position.", errorCode: "COMPLETE" };
-  if (!input.trim()) return { accepted: false, state: current, output: [], explanation: "Enter a command at the current prompt.", useCase: lesson.why, verification: lesson.verify, rollback: "No simulated state changed.", errorCode: "EMPTY" };
-  if (input.length > 256) return { accepted: false, state: current, output: [], explanation: "The simulator accepts at most 256 characters.", useCase: lesson.why, verification: lesson.verify, rollback: "Oversized input was rejected without changing state.", errorCode: "TOO_LONG" };
-  if (current.mode !== lesson.mode) return { accepted: false, state: current, output: [], explanation: `This objective belongs at the ${lesson.mode} prompt, but the saved state is ${current.mode}. Restart the lab if this mismatch persists.`, useCase: lesson.why, verification: lesson.verify, rollback: "No simulated state changed.", errorCode: "WRONG_MODE" };
-  if (!commandMatches(input, lesson.command, lesson.sensitiveTokens)) return { accepted: false, state: current, output: ["% Command rejected by the guided learning lab; simulated device state was not changed."], explanation: `That input does not complete the current objective. IOS command keywords are case-insensitive, but passwords and shared secrets must match their case exactly.`, useCase: lesson.why, verification: lesson.verify, rollback: "Rejected input is inert, so no rollback is required.", errorCode: "WRONG_COMMAND" };
+const rejected = (
+  state: DeviceBuildState,
+  lesson: DeviceBuildStep | null,
+  category: DeviceBuildFeedbackCategory,
+  explanation: string,
+  errorCode: DeviceBuildResult["errorCode"],
+  output: string[] = [],
+  displayInput?: string,
+): DeviceBuildResult => ({
+  accepted: false,
+  valid: category === "valid-unrelated" || category === "awaiting-confirmation",
+  state: clone(state),
+  output,
+  explanation,
+  useCase: lesson?.why ?? "Review the completed build or restart it from the Labs list.",
+  verification: lesson?.verify ?? "All required lab effects have been verified.",
+  rollback: category === "valid-unrelated"
+    ? "The valid exploratory command remains part of simulated running state where applicable; use its targeted no form if required."
+    : "Rejected input did not change simulated device state, so no rollback is required.",
+  ...(lesson ? { interpretation: lesson.interpretation, commonFailure: lesson.commonFailure } : {}),
+  ...(displayInput === undefined ? {} : { displayInput }),
+  category,
+  errorCode,
+});
 
-  const nextState = applyPrior(current.labId, current.stepIndex + 1);
-  return { accepted: true, state: nextState, output: lesson.output ?? [], explanation: lesson.detail, useCase: lesson.why, verification: lesson.verify, rollback: lesson.rollback };
+const parseError = (
+  state: DeviceBuildState,
+  lesson: DeviceBuildStep,
+  parsed: Exclude<RegistryParseResult, { status: "valid" }>,
+  displayInput: string,
+): DeviceBuildResult => {
+  switch (parsed.status) {
+    case "wrong-context": return rejected(state, lesson, "wrong-context", parsed.message, "WRONG_MODE", [], displayInput);
+    case "incomplete": return rejected(state, lesson, "incomplete", parsed.message, "INCOMPLETE", [], displayInput);
+    case "ambiguous": return rejected(state, lesson, "ambiguous", parsed.message, "AMBIGUOUS", [], displayInput);
+    case "invalid": return rejected(state, lesson, "invalid", parsed.message, "WRONG_COMMAND", parsed.message.split("\n"), displayInput);
+  }
+};
+
+const finishSaveConfirmation = (
+  state: DeviceBuildState,
+  lesson: DeviceBuildStep,
+  definition: DeviceBuildDefinition,
+  raw: string,
+  displayInput: string,
+): DeviceBuildResult => {
+  const execution = executeShared(state, raw);
+  state.device = execution.state;
+  syncDerivedState(state);
+  if (!execution.accepted) {
+    return rejected(
+      state,
+      lesson,
+      "invalid-value",
+      execution.output.join(" "),
+      "INVALID_VALUE",
+      execution.output,
+      displayInput,
+    );
+  }
+
+  const saveStep = definition.steps.find((step) =>
+    /^copy running-config startup-config$/iu.test(step.command));
+  if (saveStep && lesson.id === saveStep.id
+    && executionSatisfiesStep(saveStep, execution) && !state.effects.includes(saveStep.id)) {
+    state.effects.push(saveStep.id);
+  }
+  if (!saveStep || lesson.id !== saveStep.id) {
+    return {
+      accepted: false,
+      valid: true,
+      state,
+      output: execution.output,
+      explanation: "The running configuration was saved, but that valid action does not complete the current task.",
+      useCase: lesson.why,
+      verification: lesson.verify,
+      rollback: "Saving changed only the simulator's startup snapshot; continue with the current verification task.",
+      interpretation: lesson.interpretation,
+      commonFailure: lesson.commonFailure,
+      displayInput,
+      category: "valid-unrelated",
+      errorCode: "VALID_UNRELATED",
+    };
+  }
+
+  const skipped = advanceAfterCompletion(state, definition);
+  return {
+    accepted: true,
+    valid: true,
+    state,
+    output: execution.output,
+    explanation: lesson.detail,
+    useCase: lesson.why,
+    verification: lesson.verify,
+    rollback: lesson.rollback,
+    interpretation: lesson.interpretation,
+    commonFailure: lesson.commonFailure,
+    displayInput,
+    category: "objective-complete",
+    skippedSatisfiedStepIds: skipped,
+  };
+};
+
+const finishGenericConfirmation = (
+  state: DeviceBuildState,
+  lesson: DeviceBuildStep,
+  raw: string,
+  displayInput: string,
+): DeviceBuildResult => {
+  const pending = state.device.pendingInteraction;
+  if (!pending || pending.kind === "save") {
+    return rejected(state, lesson, "invalid-value", "No generic confirmation is pending.", "INVALID_VALUE", [], displayInput);
+  }
+  const execution = executeShared(state, raw);
+  state.device = execution.state;
+  syncDerivedState(state);
+
+  // A decline and a reload with no startup snapshot are both complete,
+  // non-mutating interactions even though the shared engine correctly marks
+  // their requested operation as not accepted.
+  const interactionClosed = state.device.pendingInteraction === null;
+  if (!execution.accepted && !interactionClosed) {
+    return rejected(
+      state,
+      lesson,
+      "invalid-value",
+      execution.output.join(" "),
+      "INVALID_VALUE",
+      execution.output,
+      displayInput,
+    );
+  }
+
+  return {
+    accepted: false,
+    valid: true,
+    state,
+    output: execution.output,
+    explanation: execution.accepted
+      ? `The confirmed ${pending.kind.replaceAll("-", " ")} operation changed only simulated device state; it did not complete the current learning task.`
+      : "The confirmation was declined or could not be completed, and the pending interaction was cleared without advancing the learning task.",
+    useCase: lesson.why,
+    verification: lesson.verify,
+    rollback: execution.accepted
+      ? "Use Restore checkpoint to recover the simulator state captured immediately before this broad operation."
+      : "No rollback is required because the broad operation did not change simulated device state.",
+    interpretation: lesson.interpretation,
+    commonFailure: lesson.commonFailure,
+    displayInput,
+    category: "valid-unrelated",
+    errorCode: "VALID_UNRELATED",
+  };
+};
+
+export const runDeviceBuildCommand = (current: DeviceBuildState, raw: string): DeviceBuildResult => {
+  const restored = restoreDeviceBuildState(current);
+  if (!restored) throw new Error("Invalid device build state");
+  const state = clone(restored);
+  const definition = definitionForState(state);
+  const lesson = definition.steps[state.stepIndex] ?? null;
+  if (!lesson) return rejected(state, null, "complete", "This guided build is already complete.", "COMPLETE");
+
+  const registry = registryFor(state.labId, state.seed);
+  const displayInput = redactRegistryInput(registry, raw, state.mode);
+  if (state.device.pendingInteraction?.kind === "save") {
+    return finishSaveConfirmation(state, lesson, definition, raw, displayInput);
+  }
+  if (state.device.pendingInteraction) return finishGenericConfirmation(state, lesson, raw, displayInput);
+
+  if (!raw.trim()) return rejected(state, lesson, "invalid", "Enter a command at the current prompt.", "EMPTY", [], displayInput);
+  if (raw.length > 256) return rejected(state, lesson, "invalid", "The simulator accepts at most 256 characters.", "TOO_LONG", [], displayInput);
+  const parsed = parseRegistryInput(registry, raw, state.mode);
+  if (parsed.status !== "valid") return parseError(state, lesson, parsed, displayInput);
+
+  const matchesCurrent = eventMatchesStep(registry, parsed.event, lesson);
+  const matchingStep = stepMatchingEvent(definition, registry, parsed.event);
+  const execution = executeShared(state, raw);
+  if (!execution.accepted) {
+    return rejected(
+      state,
+      lesson,
+      "invalid-value",
+      execution.output.join(" "),
+      "INVALID_VALUE",
+      execution.output,
+      displayInput,
+    );
+  }
+  state.device = execution.state;
+  syncDerivedState(state);
+  const matchingStepSatisfied = matchingStep ? executionSatisfiesStep(matchingStep, execution) : false;
+  const isTimeSensitiveFutureSave = matchingStep
+    && /^copy running-config startup-config$/iu.test(matchingStep.command)
+    && matchingStep.id !== lesson.id;
+  if (matchingStep && matchingStepSatisfied && !isTimeSensitiveFutureSave && !state.effects.includes(matchingStep.id)) {
+    state.effects.push(matchingStep.id);
+  }
+
+  const awaitingCurrentSave = matchesCurrent
+    && /^copy running-config startup-config$/iu.test(lesson.command)
+    && !/^write(?: memory)?$/iu.test(parsed.event.canonicalInput)
+    && state.pendingConfirmation === "save-startup";
+  const currentStepSatisfied = matchesCurrent && executionSatisfiesStep(lesson, execution);
+  if (currentStepSatisfied && !state.effects.includes(lesson.id)) state.effects.push(lesson.id);
+
+  if (!matchesCurrent || (!awaitingCurrentSave && !currentStepSatisfied)) {
+    const awaitingExploratoryConfirmation = state.device.pendingInteraction !== null;
+    return {
+      accepted: false,
+      valid: true,
+      state,
+      output: execution.output,
+      explanation: awaitingExploratoryConfirmation
+        ? "This valid exploratory command is waiting for confirmation. Confirm or decline it before entering another IOS command; it does not advance the current learning task."
+        : matchesCurrent
+        ? "The command ran, but the resulting device evidence does not yet satisfy this task. Use the output to identify the missing dependency."
+        : "Valid command, but it does not complete this task. Its supported state or output effect was applied without an error penalty.",
+      useCase: lesson.why,
+      verification: lesson.verify,
+      rollback: matchingStep?.rollback ?? "Read-only exploration needs no rollback; use a targeted no form for an unintended configuration change.",
+      interpretation: lesson.interpretation,
+      commonFailure: lesson.commonFailure,
+      displayInput,
+      category: awaitingExploratoryConfirmation ? "awaiting-confirmation" : "valid-unrelated",
+      ...(awaitingExploratoryConfirmation ? { awaitingConfirmation: true } : {}),
+      errorCode: "VALID_UNRELATED",
+    };
+  }
+
+  if (/^copy running-config startup-config$/iu.test(lesson.command)
+    && !/^write(?: memory)?$/iu.test(parsed.event.canonicalInput)) {
+    return {
+      accepted: false,
+      valid: true,
+      state,
+      output: execution.output,
+      explanation: "The copy command is valid. Press Enter to accept the displayed startup-config destination and complete the snapshot.",
+      useCase: lesson.why,
+      verification: lesson.verify,
+      rollback: "Startup state has not changed while the confirmation is pending.",
+      interpretation: lesson.interpretation,
+      commonFailure: lesson.commonFailure,
+      displayInput,
+      category: "awaiting-confirmation",
+      awaitingConfirmation: true,
+    };
+  }
+
+  const skipped = advanceAfterCompletion(state, definition);
+  return {
+    accepted: true,
+    valid: true,
+    state,
+    output: execution.output,
+    explanation: lesson.detail,
+    useCase: lesson.why,
+    verification: lesson.verify,
+    rollback: lesson.rollback,
+    interpretation: lesson.interpretation,
+    commonFailure: lesson.commonFailure,
+    displayInput,
+    category: "objective-complete",
+    skippedSatisfiedStepIds: skipped,
+  };
+};
+
+/**
+ * Restore the shared engine checkpoint without changing the guided step or
+ * awarding mastery. The UI can expose this whenever `device.recoveryCheckpoint`
+ * is present after reload, erase, default-interface or configure-replace work.
+ */
+export const restoreDeviceBuildCheckpoint = (current: DeviceBuildState): DeviceBuildResult => {
+  const restored = restoreDeviceBuildState(current);
+  if (!restored) throw new Error("Invalid device build state");
+  const state = clone(restored);
+  const lesson = getDeviceBuildStep(state);
+  const execution = restoreDeviceCheckpoint(state.device);
+  state.device = execution.state;
+  syncDerivedState(state);
+  return {
+    accepted: false,
+    valid: execution.accepted,
+    state,
+    output: execution.output,
+    explanation: execution.accepted
+      ? "The previous simulated running state was restored. The guided learning position and mastery evidence were not advanced."
+      : execution.output.join(" "),
+    useCase: lesson?.why ?? "Recovery remains available after the guided build so broad simulator changes can be reversed safely.",
+    verification: lesson?.verify ?? "Inspect the running configuration to verify the restored state.",
+    rollback: execution.accepted
+      ? "The one-use recovery checkpoint has now been consumed; verify the restored state before continuing."
+      : "No state changed because no valid recovery checkpoint was available.",
+    ...(lesson ? { interpretation: lesson.interpretation, commonFailure: lesson.commonFailure } : {}),
+    category: execution.accepted ? "valid-unrelated" : "invalid-value",
+    errorCode: execution.accepted ? "VALID_UNRELATED" : "INVALID_VALUE",
+  };
+};
+
+/** Cancel an interactive prompt (for example Ctrl+C) without changing device state. */
+export const cancelDeviceBuildPendingInteraction = (current: DeviceBuildState): DeviceBuildResult => {
+  const restored = restoreDeviceBuildState(current);
+  if (!restored) throw new Error("Invalid device build state");
+  const state = clone(restored);
+  const lesson = getDeviceBuildStep(state);
+  if (!state.device.pendingInteraction) {
+    return rejected(state, lesson, "invalid-value", "No interactive operation is pending.", "INVALID_VALUE");
+  }
+  state.device.pendingInteraction = null;
+  syncDerivedState(state);
+  return {
+    accepted: false,
+    valid: true,
+    state,
+    output: ["% Operation interrupted; no pending change was applied."],
+    explanation: "The interactive operation was cancelled without changing simulated device state or advancing the learning task.",
+    useCase: lesson?.why ?? "Cancel an interactive prompt when its impact has not been verified.",
+    verification: lesson?.verify ?? "Confirm that no pending interaction remains.",
+    rollback: "No rollback is required because the pending operation was not applied.",
+    ...(lesson ? { interpretation: lesson.interpretation, commonFailure: lesson.commonFailure } : {}),
+    category: "valid-unrelated",
+    errorCode: "VALID_UNRELATED",
+  };
 };
 
 export interface DeviceBuildHint {
   heading: string;
   explanation: string;
   example: string | null;
+  revealed: boolean;
 }
 
-export const getDeviceBuildHint = (state: DeviceBuildState, level: 1 | 2): DeviceBuildHint => {
+export const getDeviceBuildHint = (
+  state: DeviceBuildState,
+  level: 1 | 2 | 3,
+): DeviceBuildHint => {
   const lesson = getDeviceBuildStep(state);
-  if (!lesson) return { heading: "Build complete", explanation: "Review the completed phases or restart from the Labs list.", example: null };
-  return level === 1
-    ? { heading: `Think in ${lesson.phase} scope`, explanation: `${lesson.why} You are at ${deviceBuildPrompt(state)}; use the prompt to identify the command family and scope before recalling the exact syntax.`, example: null }
-    : { heading: "Worked command with this lab's values", explanation: lesson.detail, example: lesson.command };
+  if (!lesson) return { heading: "Build complete", explanation: "Review the verified build or restart it from the Labs list.", example: null, revealed: false };
+  if (level === 1) return { heading: "Hint 1 · reason from the outcome", explanation: lesson.hint1, example: null, revealed: false };
+  if (level === 2) return { heading: "Hint 2 · command family and shape", explanation: lesson.hint2, example: null, revealed: false };
+  return { heading: "Correct command", explanation: `${lesson.detail} Type the command yourself; revealing it does not earn mastery credit.`, example: lesson.command, revealed: true };
 };
 
-export const completeDeviceBuildInput = (state: DeviceBuildState, input: string) => {
-  const lesson = getDeviceBuildStep(state);
-  if (!lesson || !input.trim() || !lesson.command.toLocaleLowerCase("en-GB").startsWith(input.toLocaleLowerCase("en-GB"))) return input;
-  return lesson.command;
-};
+export const completeDeviceBuildInput = (
+  state: DeviceBuildState,
+  input: string,
+): CliCompletion => completeCliInput(
+  input,
+  state.mode,
+  fullCatalogue(state.labId, state.seed),
+  definitionForState(state).deviceProfile,
+);
 
+export const getDeviceBuildCliHelp = (
+  state: DeviceBuildState,
+  input: string,
+): CliHelp => cliHelp(
+  input,
+  state.mode,
+  fullCatalogue(state.labId, state.seed),
+  definitionForState(state).deviceProfile,
+);
+
+export const redactDeviceBuildInput = (state: DeviceBuildState, input: string): string =>
+  redactRegistryInput(registryFor(state.labId, state.seed), input, state.mode);
+
+export const deviceBuildContextName = (state: DeviceBuildState): string => modeNames[state.mode];

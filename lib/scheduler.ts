@@ -7,7 +7,14 @@ export const intervals = [
   2_592_000_000,
 ] as const;
 
-export type Outcome = "firstTry" | "retry" | "revealed" | "failed";
+export type Outcome =
+  | "firstTry"
+  | "retry"
+  | "guided"
+  | "assisted"
+  | "revealed"
+  | "failed"
+  | "skipped";
 
 export interface Review {
   stage: number;
@@ -24,10 +31,20 @@ export interface Review {
 
 export type ReviewEvidence =
   | { kind: "clean"; responseMs?: number }
+  | { kind: "guided"; responseMs?: number }
   | { kind: "retry"; responseMs?: number }
   | { kind: "revealed" }
   | { kind: "failed" }
+  | { kind: "skipped" }
   | { kind: "assisted"; responseMs?: number };
+
+export type MasteryOutcome =
+  | "independent"
+  | "guided-discovery"
+  | "assisted"
+  | "revealed"
+  | "incorrect"
+  | "skipped";
 
 const cappedStage = (stage: number): number =>
   Math.max(0, Math.min(stage, intervals.length - 1));
@@ -46,11 +63,12 @@ const reviewAtStage = (
   now: number,
   cleanRecalls: number,
   responseMs?: number,
+  lapse = outcome === "retry" || outcome === "revealed" || outcome === "failed" || outcome === "skipped",
 ): Review => ({
   stage,
   dueAt: now + intervals[stage],
   lastAt: now,
-  lapses: (previous?.lapses ?? 0) + (outcome === "firstTry" ? 0 : 1),
+  lapses: (previous?.lapses ?? 0) + (lapse ? 1 : 0),
   bestStage: Math.max(previous?.bestStage ?? 0, stage),
   outcome,
   cleanRecalls,
@@ -60,18 +78,17 @@ const reviewAtStage = (
 /**
  * Applies one piece of learning evidence to a review.
  *
- * Assistance is useful operational practice, but it is not retrieval evidence,
- * so it never creates or lengthens a review interval. A clean recall before its
- * due time records practice without moving the due date. This prevents repeated
- * same-session answers from racing through the spacing stages.
+ * Assistance is useful operational practice, but it is not clean retrieval
+ * evidence. Guided discovery and assisted success therefore create a short
+ * clean-recall check without advancing the mastery stage. A clean recall before
+ * its due time records practice without moving the due date. This prevents
+ * repeated same-session answers from racing through the spacing stages.
  */
 export const updateReview = (
   previous: Review | undefined,
   evidence: ReviewEvidence,
   now: number,
 ): Review | undefined => {
-  if (evidence.kind === "assisted") return previous;
-
   if (evidence.kind === "clean") {
     const cleanRecalls = previousCleanRecalls(previous) + 1;
     if (!previous) {
@@ -92,7 +109,21 @@ export const updateReview = (
     return reviewAtStage(previous, nextStage, "firstTry", now, cleanRecalls, evidence.responseMs);
   }
 
-  const outcome: Exclude<Outcome, "firstTry"> = evidence.kind;
+  if (evidence.kind === "guided" || evidence.kind === "assisted") {
+    const outcome: Outcome = evidence.kind === "guided" ? "guided" : "assisted";
+    const stage = cappedStage(previous?.stage ?? 0);
+    return reviewAtStage(
+      previous,
+      stage,
+      outcome,
+      now,
+      previousCleanRecalls(previous),
+      evidence.responseMs,
+      false,
+    );
+  }
+
+  const outcome: Outcome = evidence.kind;
   const nextStage = cappedStage((previous?.stage ?? 0) - 2);
   return reviewAtStage(
     previous,
@@ -102,6 +133,23 @@ export const updateReview = (
     previousCleanRecalls(previous),
     "responseMs" in evidence ? evidence.responseMs : undefined,
   );
+};
+
+/** Maps player-facing evidence names to the deterministic review schedule. */
+export const updateReviewForMastery = (
+  previous: Review | undefined,
+  outcome: MasteryOutcome,
+  now: number,
+  responseMs?: number,
+): Review | undefined => {
+  switch (outcome) {
+    case "independent": return updateReview(previous, { kind: "clean", responseMs }, now);
+    case "guided-discovery": return updateReview(previous, { kind: "guided", responseMs }, now);
+    case "assisted": return updateReview(previous, { kind: "assisted", responseMs }, now);
+    case "revealed": return updateReview(previous, { kind: "revealed" }, now);
+    case "incorrect": return updateReview(previous, { kind: "failed" }, now);
+    case "skipped": return updateReview(previous, { kind: "skipped" }, now);
+  }
 };
 
 /**
@@ -116,6 +164,10 @@ export const schedule = (
 ): Review => {
   const evidence: ReviewEvidence = outcome === "firstTry"
     ? { kind: "clean", responseMs }
+    : outcome === "guided"
+      ? { kind: "guided", responseMs }
+      : outcome === "assisted"
+        ? { kind: "assisted", responseMs }
     : outcome === "retry"
       ? { kind: "retry", responseMs }
       : { kind: outcome };

@@ -1,0 +1,111 @@
+name: Release QA
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test and build production artefact
+        run: npm test
+
+      - name: Create ephemeral Compose inputs
+        run: |
+          mkdir -p data secrets
+          node --input-type=module <<'NODE'
+          import { randomBytes, scryptSync } from "node:crypto";
+          import { chmodSync, writeFileSync } from "node:fs";
+          import { join } from "node:path";
+
+          const password = randomBytes(32).toString("base64url");
+          const salt = randomBytes(24);
+          const derived = scryptSync(password, salt, 64, {
+            N: 32768,
+            r: 8,
+            p: 1,
+            maxmem: 64 * 1024 * 1024,
+          });
+          const hash = `scrypt$32768$8$1$${salt.toString("base64url")}$${derived.toString("base64url")}`;
+          writeFileSync("secrets/password_hash", `${hash}\n`, { mode: 0o400 });
+          writeFileSync("secrets/session_secret", `${randomBytes(48).toString("base64url")}\n`, { mode: 0o400 });
+          const passwordPath = join(process.env.RUNNER_TEMP, "cli-rush-qa-password");
+          writeFileSync(passwordPath, `${password}\n`, { mode: 0o600 });
+          chmodSync(passwordPath, 0o600);
+          NODE
+          sudo chown -R 1000:1000 data secrets
+          sudo chmod 0700 data secrets
+          sudo chmod 0400 secrets/password_hash secrets/session_secret
+          cat > .env <<'ENV'
+          CLI_RUSH_USERNAME=admin
+          CLI_RUSH_BIND_ADDRESS=127.0.0.1
+          CLI_RUSH_PUBLIC_ORIGIN=https://cli-rush.example.com
+          CLI_RUSH_LOCAL_ORIGIN=http://127.0.0.1:3080
+          CLI_RUSH_TRUST_PROXY_PEERS=
+          CLI_RUSH_MAX_PASSWORD_CHECKS=4
+          ENV
+
+      - name: Validate and build Compose service
+        run: |
+          docker compose config --quiet
+          docker compose build
+
+      - name: Start container and verify health and login
+        run: |
+          docker compose up -d --no-build
+          for attempt in $(seq 1 90); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' cli-rush 2>/dev/null || true)
+            if [ "$status" = "healthy" ]; then
+              break
+            fi
+            if [ "$status" = "unhealthy" ]; then
+              docker compose logs cli-rush
+              exit 1
+            fi
+            sleep 2
+          done
+          test "$(docker inspect --format '{{.State.Health.Status}}' cli-rush)" = "healthy"
+          test "$(curl --silent --show-error --output /tmp/health --write-out '%{http_code}' http://127.0.0.1:3080/healthz)" = "200"
+          test "$(cat /tmp/health)" = "ok"
+          password=$(cat "$RUNNER_TEMP/cli-rush-qa-password")
+          status=$(curl --silent --show-error --output /tmp/login-body --dump-header /tmp/login-headers --write-out '%{http_code}' \
+            --request POST \
+            --header 'Origin: http://127.0.0.1:3080' \
+            --header 'Sec-Fetch-Site: same-origin' \
+            --header 'Content-Type: application/x-www-form-urlencoded' \
+            --data-urlencode 'username=admin' \
+            --data-urlencode "password=$password" \
+            http://127.0.0.1:3080/login)
+          test "$status" = "303"
+          grep -qi '^set-cookie: cli_rush_session=' /tmp/login-headers
+
+      - name: Show container diagnostics
+        if: always()
+        run: |
+          docker compose ps || true
+          docker compose logs --tail=100 cli-rush || true
+
+      - name: Stop Compose service
+        if: always()
+        run: docker compose down --remove-orphans || true

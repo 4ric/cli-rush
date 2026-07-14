@@ -19,3 +19,26 @@ validation
 outputs
 npm-debug.log*
 *.tsbuildinfo
+configuration-references
+production-configs
+reference-configs
+source-configs
+*.cfg
+*.conf
+*.cer
+*.crt
+*.jks
+*.key
+*.p12
+*.pem
+*.pfx
+*.pcap
+*.pcapng
+**/big site router.txt
+**/big site switch1.txt
+**/big site switch2.txt
+**/big site switch3.txt
+**/small site router.txt
+**/small site switch1.txt
+**/small site switch2.txt
+codex-clipboard-*.png

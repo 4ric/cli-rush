@@ -2,9 +2,17 @@
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
 
+interface WorkerAssetFetcher {
+  fetch(input: Request): Promise<Response>;
+}
+
+interface WorkerDatabaseBinding {
+  readonly preparedStatements?: never;
+}
+
 interface Env {
-  ASSETS: Fetcher;
-  DB: D1Database;
+  ASSETS: WorkerAssetFetcher;
+  DB: WorkerDatabaseBinding;
   IMAGES: {
     input(stream: ReadableStream): {
       transform(options: Record<string, unknown>): {

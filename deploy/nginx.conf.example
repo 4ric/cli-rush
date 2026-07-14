@@ -5,14 +5,17 @@ server {
     server_name cli-rush.example.com;
 
     # Configure your existing certificate directives here.
+    # Keep this hostname identical to CLI_RUSH_PUBLIC_ORIGIN. Reject aliases
+    # instead of forwarding an attacker-controlled Host to the application.
+    if ($host != "cli-rush.example.com") { return 444; }
     client_max_body_size 1m;
 
     location = /login {
         limit_req zone=cli_rush_login burst=3 nodelay;
         proxy_pass http://127.0.0.1:3080;
-        proxy_set_header Host $host;
+        proxy_set_header Host cli-rush.example.com;
         proxy_set_header X-Forwarded-Proto https;
-        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Host cli-rush.example.com;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $remote_addr;
     }
@@ -20,9 +23,9 @@ server {
     location / {
         proxy_pass http://127.0.0.1:3080;
         proxy_http_version 1.1;
-        proxy_set_header Host $host;
+        proxy_set_header Host cli-rush.example.com;
         proxy_set_header X-Forwarded-Proto https;
-        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Host cli-rush.example.com;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $remote_addr;
     }

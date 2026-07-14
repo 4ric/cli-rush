@@ -1,4 +1,6 @@
 import type { Command } from "./engine.ts";
+import { commandGrammarTokens } from "./cli-grammar.ts";
+import { learningTaskFor } from "./learning-tasks.ts";
 import type { Review } from "./scheduler.ts";
 
 export interface CommandRecallHistory {
@@ -29,6 +31,12 @@ export interface CommandQueueOptions {
   limit?: number;
   currentTopics?: readonly string[];
   mix?: QueueMix;
+  /**
+   * Commands immediately before this queue, oldest first. Supplying these is
+   * important when a live round appends another shuffle bag because those
+   * commands may no longer be present in the remaining catalogue.
+   */
+  recentCommands?: readonly Command[];
 }
 
 export interface AdaptiveSessionOptions extends CommandQueueOptions {
@@ -43,6 +51,7 @@ export interface DailyRecallOptions {
 }
 
 export const DEFAULT_SESSION_SIZE = 20;
+export const SEMANTIC_COOLDOWN_SIZE = 8;
 
 export const easyPracticeCatalogue = (
   catalogue: readonly Command[],
@@ -184,6 +193,132 @@ const safeRandom = (random: RandomSource): number => {
   return Math.min(1 - Number.EPSILON, Math.max(0, value));
 };
 
+export interface CommandEquivalence {
+  taskId: string;
+  conceptId: string;
+  canonical: string;
+  family: string;
+  taskText: string;
+  navigationAction: string | null;
+}
+
+const lower = (value: string): string => value.toLocaleLowerCase("en-GB");
+
+const collapseText = (value: string): string => lower(value)
+  .normalize("NFKC")
+  .replace(/[\u2010-\u2015]/gu, "-")
+  .replace(/\s+/gu, " ")
+  .trim();
+
+/**
+ * Removes seeded values while retaining the wording that describes the
+ * learning outcome. This prevents a changed address, VLAN or interface number
+ * from disguising the same task in a later catalogue entry.
+ */
+const normalisedTaskText = (value: string): string => collapseText(value)
+  .replace(/\b(?:\d{1,3}\.){3}\d{1,3}(?:\/\d{1,3})?\b/gu, "<ipv4>")
+  .replace(/\b[0-9a-f]{0,4}:[0-9a-f:]+(?:\/\d{1,3})?\b/giu, "<ipv6>")
+  .replace(/\b(?:fastethernet|gigabitethernet|tengigabitethernet|fortygigabitethernet|hundredgige|ethernet|fa|gi|te|fo|hu|port-channel|po|vlan)\s*\d+(?:\/\d+)*(?:\.\d+)?\b/giu, "<interface>")
+  .replace(/\b\d+\b/gu, "<number>")
+  .replace(/\s+/gu, " ")
+  .trim();
+
+const normalisedConceptId = (value: string): string => collapseText(value)
+  .replace(/(?:^|[.-])\d+(?=$|[.-])/gu, ".<number>")
+  .replace(/\.{2,}/gu, ".");
+
+const commandShape = (command: Command): string => commandGrammarTokens(command)
+  .map((token) => token.kind === "keyword"
+    ? lower(token.source)
+    : `<${token.argumentKind ?? "argument"}>`)
+  .join(" ");
+
+const primaryFamily = (command: Command): string => {
+  const keywords = commandGrammarTokens(command)
+    .filter((token) => token.kind === "keyword")
+    .map((token) => lower(token.source))
+    .filter((token) => token !== "no" && token !== "do");
+  if (!keywords.length) return "unknown";
+  if (command.kind === "navigation" && (keywords[0] === "exit" || keywords[0] === "end")) {
+    return "navigation-leave-configuration";
+  }
+  // Two structural keywords distinguish useful broad families such as
+  // `show ip`, `ip route` and `switchport mode` without treating every show
+  // command as one enormous family.
+  return keywords.slice(0, 2).join(" ");
+};
+
+const navigationAction = (command: Command): string | null => {
+  if (command.kind !== "navigation") return null;
+  const first = collapseText(command.canonical).split(" ")[0];
+  // In a recall queue both forms teach leaving configuration scope. They are
+  // kept apart even though their exact state transitions differ in the engine.
+  if (first === "exit" || first === "end") return "leave-configuration";
+  return null;
+};
+
+const equivalenceCache = new WeakMap<Command, CommandEquivalence>();
+
+/** Stable semantic keys used by queue cooldown and its property tests. */
+export const commandEquivalence = (command: Command): CommandEquivalence => {
+  const cached = equivalenceCache.get(command);
+  if (cached) return cached;
+  const task = learningTaskFor(command);
+  const result = {
+    taskId: task.id,
+    conceptId: normalisedConceptId(task.conceptId),
+    canonical: commandShape(command),
+    family: primaryFamily(command),
+    taskText: normalisedTaskText(task.task),
+    navigationAction: navigationAction(command),
+  };
+  equivalenceCache.set(command, result);
+  return result;
+};
+
+const equivalenceKeysMatch = (a: CommandEquivalence, b: CommandEquivalence): boolean =>
+  a.taskId === b.taskId
+    || a.conceptId === b.conceptId
+    || a.canonical === b.canonical
+    || a.family === b.family
+    || a.taskText === b.taskText
+    || Boolean(a.navigationAction && a.navigationAction === b.navigationAction);
+
+export const commandsAreEquivalent = (left: Command, right: Command): boolean =>
+  equivalenceKeysMatch(commandEquivalence(left), commandEquivalence(right));
+
+const namespacedEquivalenceKeys = (command: Command): string[] => {
+  const keys = commandEquivalence(command);
+  return [
+    `task:${keys.taskId}`,
+    `concept:${keys.conceptId}`,
+    `canonical:${keys.canonical}`,
+    `family:${keys.family}`,
+    `text:${keys.taskText}`,
+    ...(keys.navigationAction ? [`navigation:${keys.navigationAction}`] : []),
+  ];
+};
+
+const incrementEquivalenceCounts = (
+  counts: Map<string, number>,
+  command: Command,
+  amount: 1 | -1,
+): void => {
+  for (const key of namespacedEquivalenceKeys(command)) {
+    const next = (counts.get(key) ?? 0) + amount;
+    if (next > 0) counts.set(key, next);
+    else counts.delete(key);
+  }
+};
+
+const equivalencePressure = (counts: ReadonlyMap<string, number>, command: Command): number =>
+  Math.max(...namespacedEquivalenceKeys(command).map((key) => counts.get(key) ?? 0));
+
+const outsideCooldown = (
+  command: Command,
+  recent: readonly Command[],
+): boolean => recent.every((previous) => !commandsAreEquivalent(command, previous));
+
 const pickWeightedIndex = (
   commands: readonly Command[],
   history: CommandHistory,
@@ -256,15 +391,13 @@ const allocateQuotas = (
   return quotas;
 };
 
-const differentFromPrevious = (
-  command: Command,
-  previous: Command | undefined,
-): boolean => !previous
-  || (
-    command.id !== previous.id
-    && command.canonical.toLocaleLowerCase("en-GB")
-      !== previous.canonical.toLocaleLowerCase("en-GB")
-  );
+const orderedBuckets = (preferred: QueueBucket): QueueBucket[] => [
+  preferred,
+  ...bucketOrder.filter((bucket) => bucket !== preferred),
+];
+
+const recentTail = (commands: readonly Command[]): Command[] =>
+  commands.slice(-SEMANTIC_COOLDOWN_SIZE);
 
 /** Builds a bounded, mixed session with no duplicate objectives. */
 export const buildAdaptiveCommandSession = (
@@ -283,6 +416,9 @@ export const buildAdaptiveCommandSession = (
   const mix = normalisedMix(options.mix ?? DEFAULT_QUEUE_MIX);
   const currentTopics = new Set(options.currentTopics ?? []);
   const previous = catalogue.find((command) => command.id === options.previousFirstId);
+  const recent = recentTail(options.recentCommands?.length
+    ? options.recentCommands
+    : previous ? [previous] : []);
   const pools: Record<QueueBucket, Command[]> = {
     priority: [],
     new: [],
@@ -291,6 +427,8 @@ export const buildAdaptiveCommandSession = (
   for (const command of catalogue) {
     pools[commandQueueBucket(history[command.id], now)].push(command);
   }
+  const remainingEquivalence = new Map<string, number>();
+  for (const command of catalogue) incrementEquivalenceCounts(remainingEquivalence, command, 1);
 
   const quotas = allocateQuotas({
     priority: pools.priority.length,
@@ -307,26 +445,42 @@ export const buildAdaptiveCommandSession = (
       preferred = bucketOrder.find((bucket) => quotas[bucket] > 0) ?? preferred;
     }
 
-    const firstDraw = queue.length === 0 && catalogue.length > 1;
-    const usableBuckets = [preferred, ...bucketOrder.filter((bucket) => bucket !== preferred)]
-      .filter((bucket, index, values) => values.indexOf(bucket) === index)
-      .filter((bucket) => quotas[bucket] > 0)
-      .filter((bucket) =>
-        !firstDraw || pools[bucket].some((command) => differentFromPrevious(command, previous)));
-    const bucket = usableBuckets[0]
-      ?? bucketOrder.find((candidate) => quotas[candidate] > 0);
+    const recentWindow = recentTail(recent);
+    const allSafeBuckets = orderedBuckets(preferred)
+      .filter((bucket) => pools[bucket].some((command) => outsideCooldown(command, recentWindow)));
+    const quotaSafeBuckets = allSafeBuckets.filter((bucket) => quotas[bucket] > 0);
+    // The 60/20/20 split is a target, not permission to repeat a concept. If
+    // only a bucket whose quota is exhausted contains a safe alternative,
+    // borrow one remaining slot from the preferred due/new/retained bucket.
+    const bucket = quotaSafeBuckets[0]
+      ?? allSafeBuckets[0]
+      ?? orderedBuckets(preferred).find((candidate) => quotas[candidate] > 0 && pools[candidate].length > 0)
+      ?? bucketOrder.find((candidate) => pools[candidate].length > 0);
     if (!bucket) break;
 
-    const pool = firstDraw
-      ? pools[bucket].filter((command) => differentFromPrevious(command, previous))
-      : pools[bucket];
-    const pickedAt = pickWeightedIndex(pool, history, random, now, currentTopics);
-    const picked = pool[pickedAt];
+    const safePool = pools[bucket].filter((command) => outsideCooldown(command, recentWindow));
+    const pool = safePool.length ? safePool : pools[bucket];
+    // Prefer the most constrained remaining semantic group. This look-ahead
+    // prevents a random draw from consuming all alternative families early and
+    // creating an avoidable cooldown collision at the end of the shuffle bag.
+    const pressure = Math.max(...pool.map((command) =>
+      equivalencePressure(remainingEquivalence, command)));
+    const constrainedPool = pool.filter((command) =>
+      equivalencePressure(remainingEquivalence, command) === pressure);
+    const pickedAt = pickWeightedIndex(constrainedPool, history, random, now, currentTopics);
+    const picked = constrainedPool[pickedAt];
     if (!picked) break;
     queue.push(picked.id);
-    quotas[bucket] -= 1;
+    recent.push(picked);
+    if (quotas[bucket] > 0) {
+      quotas[bucket] -= 1;
+    } else {
+      const donor = orderedBuckets(preferred).find((candidate) => quotas[candidate] > 0);
+      if (donor) quotas[donor] -= 1;
+    }
     const sourceAt = pools[bucket].findIndex((command) => command.id === picked.id);
     pools[bucket].splice(sourceAt, 1);
+    incrementEquivalenceCounts(remainingEquivalence, picked, -1);
   }
 
   return queue;
@@ -378,17 +532,20 @@ export const buildDailyRecallSession = (
         || leftId.localeCompare(rightId);
     });
 
-  if (dueEntries.length > 1 && previous) {
-    const differentAt = dueEntries.findIndex(([id]) => {
-      const command = catalogue.find((entry) => entry.id === id)!;
-      return differentFromPrevious(command, previous);
-    });
-    if (differentAt > 0) {
-      const [different] = dueEntries.splice(differentAt, 1);
-      dueEntries.unshift(different);
-    }
-  }
-
   const limit = Math.max(0, Math.floor(options.limit ?? DEFAULT_DAILY_RECALL_SIZE));
-  return dueEntries.slice(0, limit).map(([id]) => id);
+  const remaining = [...dueEntries];
+  const ordered: string[] = [];
+  const recent: Command[] = previous ? [previous] : [];
+  while (ordered.length < limit && remaining.length) {
+    const safeAt = remaining.findIndex(([id]) => {
+      const command = catalogue.find((entry) => entry.id === id)!;
+      return outsideCooldown(command, recentTail(recent));
+    });
+    const pickedAt = safeAt >= 0 ? safeAt : 0;
+    const [[id]] = remaining.splice(pickedAt, 1);
+    const picked = catalogue.find((command) => command.id === id)!;
+    ordered.push(id);
+    recent.push(picked);
+  }
+  return ordered;
 };

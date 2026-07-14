@@ -1,6 +1,6 @@
 import type { Command } from "./engine.ts";
-import { teachingFor } from "./command-teaching.ts";
 import { commandGrammarTokens } from "./cli-grammar.ts";
+import { learningTaskFor } from "./learning-tasks.ts";
 
 export interface PreAnswerLearningAid {
   text: string;
@@ -35,15 +35,6 @@ export const learningPoints = (
   return Math.round(50 * difficulty * assistanceMultiplier * attemptMultiplier * streakMultiplier);
 };
 
-const strategies: Record<Command["kind"], string> = {
-  navigation:
-    "Picture the CLI prompt before and after the move. Name the destination context in your head, then retrieve the route without looking at command text.",
-  verification:
-    "Picture the output that would prove the objective. Recall the information family, subject and requested level of detail in that order.",
-  configuration:
-    "Turn the objective into four roles: feature, action, target and value. Check the current CLI context, then retrieve those roles in order.",
-};
-
 const safeExplanations: Record<Command["kind"], (topic: string) => string> = {
   navigation: (topic) =>
     `This is a CLI navigation task for ${topic}. It changes the active prompt or command context without exposing the required answer.`,
@@ -65,10 +56,10 @@ export const safeCommandContext = (command: Command): CommandContext => ({
 
 /** Full post-answer explanation for an accepted command. */
 export const acceptedCommandContext = (command: Command): CommandContext => {
-  const teaching = teachingFor(command);
+  const task = learningTaskFor(command);
   return {
-    explanation: command.custom ? command.explanation : teaching.purpose,
-    useCase: teaching.whenToUse,
+    explanation: command.custom ? command.explanation : task.correctExplanation,
+    useCase: task.whyThisMatters,
   };
 };
 
@@ -133,22 +124,25 @@ const semanticStructures: Record<Command["kind"], string> = {
   configuration: "Structure: [feature] → [action] → [target] → [value, where required].",
 };
 
-export const learningHintsFor = (command: Command): EasyLearningHints => ({
-  strategy: {
-    text: strategies[command.kind],
-    assisted: false,
-  },
-  structure: {
-    text: `${semanticStructures[command.kind]} Token roles: ${semanticCommandShape(command)}`,
-    assisted: true,
-  },
-  family: {
-    text: `Command family: ${tokensOf(command.canonical)[0] ?? "not available"}. Build the remaining keywords and arguments from the objective.`,
-    assisted: true,
-  },
-  reveal: {
-    text: command.canonical,
-    assisted: true,
-  },
-  postAnswerMnemonic: chunkingMnemonic(command),
-});
+export const learningHintsFor = (command: Command): EasyLearningHints => {
+  const task = learningTaskFor(command);
+  return {
+    strategy: {
+      text: task.hint1,
+      assisted: true,
+    },
+    structure: {
+      text: `${semanticStructures[command.kind]} Token roles: ${semanticCommandShape(command)}`,
+      assisted: true,
+    },
+    family: {
+      text: task.hint2,
+      assisted: true,
+    },
+    reveal: {
+      text: task.canonicalCommand,
+      assisted: true,
+    },
+    postAnswerMnemonic: chunkingMnemonic(command),
+  };
+};

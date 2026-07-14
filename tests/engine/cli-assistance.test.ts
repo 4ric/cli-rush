@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cliHelp, completeCliInput } from "../../lib/cli-assistance.ts";
-import { commands, type Command } from "../../lib/engine.ts";
+import { cliHelp, completeCliInput, parserProvenShorthandExamples } from "../../lib/cli-assistance.ts";
+import { commands, resolveCommand, type Command } from "../../lib/engine.ts";
+import { profileIdsForCommand } from "../../lib/command-registry.ts";
 
 const fixture: Command[] = [
   {
@@ -77,7 +78,7 @@ test("Tab remains deterministic for ambiguous, invalid and wrong-mode prefixes",
   assert.equal(ambiguous.assisted, false);
 
   assert.equal(completeCliInput("configure", "privileged", fixture).matchingCommands, 0);
-  assert.equal(completeCliInput("show h", "privileged", fixture).matchingCommands, 0);
+  assert.equal(completeCliInput("show h", "privileged", fixture).input, "show history");
   assert.equal(completeCliInput("show h", "user", fixture).input, "show history");
 
   const variable = completeCliInput("ping 1", "user", commands);
@@ -97,8 +98,8 @@ test("question-mark help lists next tokens and a return marker contextually", ()
   assert.equal(root.assisted, true);
 
   const show = cliHelp("show ", "privileged", fixture);
-  assert.deepEqual(show.options.map((option) => option.value), ["inventory", "ip", "version"]);
-  assert.equal(show.options[1].description, "Use IPv4 features");
+  assert.deepEqual(show.options.map((option) => option.value), ["history", "inventory", "ip", "version"]);
+  assert.equal(show.options.find((option) => option.value === "ip")?.description, "Use IPv4 features");
 
   const partial = cliHelp("show v", "privileged", fixture);
   assert.deepEqual(partial.options, [{
@@ -118,7 +119,7 @@ test("question-mark help masks task values with parser-like grammar", () => {
     value: "A.B.C.D",
     description: "IPv4 address",
   }]);
-  assert.deepEqual(cliHelp("interface ", "global", commands).options, [{
+  assert.deepEqual(cliHelp("interface ", "global", commands, "router-ios-xe").options, [{
     value: "INTERFACE",
     description: "Interface type and identifier",
   }]);
@@ -204,6 +205,68 @@ test("context help never discloses built-in IPv4 literals", () => {
       for (const literal of ipv4Literals) {
         assert.equal(renderedHelp.includes(literal), false, `${command.id} leaked ${literal}`);
       }
+    }
+  }
+});
+
+test("Tab completes only the current global keyword", () => {
+  assert.equal(
+    completeCliInput("serv", "global", commands, "router-ios-xe").input,
+    "service ",
+  );
+  assert.equal(
+    completeCliInput("ena", "global", commands, "router-ios-xe").input,
+    "enable ",
+  );
+  assert.notEqual(
+    completeCliInput("ena", "global", commands, "router-ios-xe").input,
+    "enable secret <secret-value>",
+  );
+});
+
+test("profile-aware help exposes only executable range syntax", () => {
+  const router = cliHelp("interface ", "global", commands, "router-ios-xe");
+  const catalyst = cliHelp("interface ", "global", commands, "catalyst-l2");
+  assert.equal(router.options.some((option) => option.value === "range"), false);
+  assert.equal(catalyst.options.some((option) => option.value === "range"), true);
+
+  const range = cliHelp("interface range ", "global", commands, "catalyst-l2");
+  assert.deepEqual(range.options, [{
+    value: "INTERFACE-RANGE",
+    description: "Declared interface range",
+  }]);
+});
+
+test("configuration help and Tab expose the executable do branch", () => {
+  for (const context of ["global", "interface", "router", "line", "vlan", "acl", "dhcp"] as const) {
+    const root = cliHelp("", context, commands, "router-ios-xe");
+    assert.ok(root.options.some((option) => option.value === "do"), context);
+    const exec = cliHelp("do show ", context, commands, "router-ios-xe");
+    assert.ok(exec.options.some((option) => option.value === "ip"), context);
+  }
+  assert.equal(
+    completeCliInput("do sh", "global", commands, "router-ios-xe").input,
+    "do show ",
+  );
+});
+
+test("Layer 2 profile help omits router DHCP server branches", () => {
+  const catalyst = cliHelp("ip ", "global", commands, "catalyst-l2");
+  assert.equal(catalyst.options.some((option) => option.value === "dhcp"), true, "DHCP snooping remains available");
+  const dhcp = cliHelp("ip dhcp ", "global", commands, "catalyst-l2");
+  assert.equal(dhcp.options.some((option) => option.value === "pool" || option.value === "excluded-address"), false);
+  assert.ok(dhcp.options.some((option) => option.value === "snooping"));
+});
+
+test("reveal shorthand is bounded and accepted by the shared parser", () => {
+  for (const command of commands) {
+    const profileId = profileIdsForCommand(command)[0];
+    const examples = parserProvenShorthandExamples(command, commands, profileId);
+    assert.ok(examples.length <= 3);
+    for (const example of examples) {
+      const result = resolveCommand(example, command.mode, commands, profileId);
+      assert.equal(result.status, "valid", `${command.id}: ${example}`);
+      if (result.status === "valid") assert.equal(result.command.id, command.id);
     }
   }
 });

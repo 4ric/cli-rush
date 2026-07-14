@@ -6,6 +6,7 @@ import {
   schedule,
   score,
   updateReview,
+  updateReviewForMastery,
 } from "../../lib/scheduler.ts";
 
 const now = Date.parse("2026-07-10T12:00:00Z");
@@ -36,10 +37,32 @@ test("unassisted success advances only at or after the due boundary and caps", (
   assert.equal(schedule(review, "firstTry", review.dueAt).stage, intervals.length - 1);
 });
 
-test("assisted success creates no mastery and preserves an existing schedule", () => {
-  assert.equal(updateReview(undefined, { kind: "assisted" }, now), undefined);
+test("guided and assisted success schedule a short clean-recall check without mastery", () => {
+  const newAssisted = updateReview(undefined, { kind: "assisted" }, now)!;
+  assert.equal(newAssisted.stage, 0);
+  assert.equal(newAssisted.outcome, "assisted");
+  assert.equal(newAssisted.cleanRecalls, 0);
+  assert.equal(newAssisted.lapses, 0);
+  assert.equal(newAssisted.dueAt, now + intervals[0]);
+
   const previous = schedule(undefined, "firstTry", now);
-  assert.equal(updateReview(previous, { kind: "assisted" }, now + 5_000), previous);
+  const guided = updateReview(previous, { kind: "guided" }, now + 5_000)!;
+  assert.equal(guided.stage, previous.stage);
+  assert.equal(guided.bestStage, previous.bestStage);
+  assert.equal(guided.cleanRecalls, previous.cleanRecalls);
+  assert.equal(guided.outcome, "guided");
+  assert.equal(guided.lapses, previous.lapses);
+  assert.equal(guided.dueAt, now + 5_000 + intervals[0]);
+});
+
+test("all player-facing mastery outcomes map to an explicit deterministic review", () => {
+  const independent = updateReviewForMastery(undefined, "independent", now)!;
+  assert.equal(independent.cleanRecalls, 1);
+  assert.equal(updateReviewForMastery(undefined, "guided-discovery", now)!.outcome, "guided");
+  assert.equal(updateReviewForMastery(undefined, "assisted", now)!.outcome, "assisted");
+  assert.equal(updateReviewForMastery(independent, "revealed", now + 1)!.outcome, "revealed");
+  assert.equal(updateReviewForMastery(independent, "incorrect", now + 1)!.outcome, "failed");
+  assert.equal(updateReviewForMastery(independent, "skipped", now + 1)!.outcome, "skipped");
 });
 
 test("legacy clean evidence survives a later lapse", () => {
@@ -55,7 +78,7 @@ test("retry, reveal and failure step back without deleting best stage", () => {
   review = schedule(review, "firstTry", review.dueAt);
   assert.equal(review.stage, 2);
 
-  for (const outcome of ["retry", "revealed", "failed"] as const) {
+  for (const outcome of ["retry", "revealed", "failed", "skipped"] as const) {
     const lapsed = schedule(review, outcome, review.lastAt + 1);
     assert.equal(lapsed.stage, 0);
     assert.equal(lapsed.bestStage, 2);

@@ -74,8 +74,8 @@ const rows: Row[] = [
   ["config.erase-startup","privileged","erase startup-config","Erase the simulated startup configuration.","Configuration management","configuration",2],
   ["config.reload","privileged","reload","Reload the simulated device.","Configuration management","configuration",2],
 
-  ["config.enable-secret","global","enable secret Training-Only-Secret","Configure a privileged EXEC secret in the simulator.","Secure management","configuration"],
-  ["config.username","global","username netadmin privilege 15 secret Training-Only-Secret","Create the local netadmin account.","Secure management","configuration",2],
+  ["config.enable-secret","global","enable secret <secret-value>","Configure a supplied privileged EXEC secret in the simulator.","Secure management","configuration"],
+  ["config.username","global","username netadmin privilege 15 secret <secret-value>","Create the fictional local netadmin account with a supplied secret.","Secure management","configuration",2],
   ["config.domain-name","global","ip domain-name lab.example","Configure the device domain name.","Secure management","configuration"],
   ["config.crypto-key","global","crypto key generate rsa modulus 2048","Generate a simulated 2048-bit RSA key.","Secure management","configuration",2],
   ["config.ssh-version","global","ip ssh version 2","Require SSH version 2.","Secure management","configuration"],
@@ -88,7 +88,7 @@ const rows: Row[] = [
   ["config.logging-buffered","global","logging buffered 16384 warnings","Buffer warning-level log messages locally.","Monitoring services","configuration",2],
   ["config.ntp-server","global","ntp server 192.0.2.20 prefer","Configure the preferred NTP server.","Monitoring services","configuration",2],
   ["config.ntp-master","global","ntp master 3","Make the simulator an NTP master at stratum 3.","Monitoring services","configuration",2],
-  ["config.snmp-community","global","snmp-server community READONLY ro","Configure a read-only SNMP community in the simulator.","Monitoring services","configuration",2],
+  ["config.snmp-community","global","snmp-server community <community-value> ro","Configure a supplied read-only SNMP community in the simulator.","Monitoring services","configuration",2],
   ["config.snmp-location","global","snmp-server location London-Lab","Configure the SNMP location string.","Monitoring services","configuration"],
   ["config.snmp-contact","global","snmp-server contact network-team@example.com","Configure the SNMP contact string.","Monitoring services","configuration"],
   ["config.cdp-run","global","cdp run","Enable CDP globally.","Neighbour discovery","configuration"],
@@ -165,7 +165,7 @@ const rows: Row[] = [
   ["nav.exit-vlan","vlan","exit","Leave VLAN configuration mode.","CLI navigation","navigation"],
   ["nav.end-vlan","vlan","end","Return from VLAN configuration to Privileged EXEC.","CLI navigation","navigation"],
 
-  ["router.router-id","router","router-id 1.1.1.1","Set the OSPF router ID.","OSPF","configuration",2],
+  ["router.router-id","router","router-id 192.0.2.1","Set the OSPF router ID.","OSPF","configuration",2],
   ["router.passive-default","router","passive-interface default","Make all OSPF interfaces passive by default.","OSPF","configuration",2],
   ["router.no-passive","router","no passive-interface GigabitEthernet0/0","Permit OSPF hellos on GigabitEthernet0/0.","OSPF","configuration",2],
   ["router.reference-bandwidth","router","auto-cost reference-bandwidth 10000","Use 10 Gbps as the OSPF reference bandwidth.","OSPF","configuration",3],
