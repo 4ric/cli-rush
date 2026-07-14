@@ -206,8 +206,8 @@ try {
       const screenshot = await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true });
       await writeFile(join(outputDirectory, `activity-${name}.png`), Buffer.from(screenshot.data, "base64"));
     }
-    const desktopHistoryPass = name !== "1440x900" || (activity.historyHeight ?? 0) >= 479.5;
-    viewportResults.push({ viewport: name, home, activity, desktopHistoryPass, pass: !home.bodyOverflow && !activity.bodyOverflow && home.horizontalClips.length === 0 && activity.horizontalClips.length === 0 && home.smallTargets.length === 0 && activity.smallTargets.length === 0 && home.smallSupportingText.length === 0 && activity.smallSupportingText.length === 0 && activity.inputReachable && (activity.inputFontSize ?? 0) >= 16 && desktopHistoryPass });
+    const desktopHistoryBalanced = name !== "1440x900" || ((activity.historyHeight ?? 0) >= 300 && (activity.historyHeight ?? 0) <= 520);
+    viewportResults.push({ viewport: name, home, activity, desktopHistoryBalanced, pass: !home.bodyOverflow && !activity.bodyOverflow && home.horizontalClips.length === 0 && activity.horizontalClips.length === 0 && home.smallTargets.length === 0 && activity.smallTargets.length === 0 && home.smallSupportingText.length === 0 && activity.smallSupportingText.length === 0 && activity.inputReachable && (activity.inputFontSize ?? 0) >= 16 && desktopHistoryBalanced });
   }
 
   // axe-core is already pinned transitively by the repository's accessibility

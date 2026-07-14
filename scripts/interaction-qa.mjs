@@ -108,8 +108,8 @@ try {
     if (!await workspace.locator(".task-details").isVisible()) {
       await workspace.locator("button.task-details-toggle").click();
     }
-    await workspace.getByRole("button", { name: "Hint: show structure" }).click();
-    await workspace.getByRole("button", { name: "Show command family" }).click();
+    await workspace.getByRole("button", { name: "Show hint" }).click();
+    await workspace.getByRole("button", { name: "Show another hint" }).click();
     await workspace.getByRole("button", { name: "Reveal answer · no mastery" }).click();
     const answer = (await workspace.locator(".reveal-bundle code.revealed").textContent())?.trim() ?? "";
     return { roundInput, answer };
@@ -126,6 +126,7 @@ try {
   await revealed.roundInput.press("Enter");
   await page.waitForTimeout(50);
   check("a rapid reward stops the previous notes before starting new ones", await page.evaluate(() => window.__cliRushAudioQa.starts.length === 4 && window.__cliRushAudioQa.forcedStops >= 2));
+  await page.getByRole("button", { name: "Next command" }).click();
 
   const cdp = await desktop.newCDPSession(page);
   await cdp.send("Emulation.setDeviceMetricsOverride", { width: 720, height: 450, screenWidth: 1440, screenHeight: 900, deviceScaleFactor: 1, mobile: false });
@@ -174,9 +175,43 @@ try {
   });
   const mobilePage = await mobile.newPage();
   await mobilePage.goto(baseUrl, { waitUntil: "networkidle" });
+  await mobilePage.locator("details.account-menu > summary").click();
+  const accountMenu = await mobilePage.locator("details.account-menu > div").evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return {
+      visible: getComputedStyle(element).display !== "none",
+      contained: rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight,
+      rect: [rect.left, rect.top, rect.right, rect.bottom],
+    };
+  });
+  check("mobile account menu opens beneath the header and stays on-screen", accountMenu.visible && accountMenu.contained, accountMenu);
+  check("mobile account menu keeps command management reachable", await mobilePage.getByRole("button", { name: "Manage commands" }).isVisible());
+  await mobilePage.locator("details.account-menu > summary").click();
   await mobilePage.locator(".continue-card .primary").click();
   const mobileInput = mobilePage.locator(".terminal input");
   await mobileInput.waitFor();
+  const idleTerminal = await mobilePage.evaluate(() => {
+    const log = document.querySelector(".terminal-panel > .terminal > .log")?.getBoundingClientRect();
+    const shortcuts = [...document.querySelectorAll(".terminal-panel .terminal-shortcuts button")].map((element) => element.getBoundingClientRect());
+    return {
+      logHeight: log?.height ?? null,
+      shortcutCount: shortcuts.length,
+      shortcutsContained: shortcuts.every((rect) => rect.left >= 0 && rect.right <= innerWidth),
+      documentOverflow: document.documentElement.scrollWidth > innerWidth + 1,
+    };
+  });
+  check("idle mobile terminal uses a compact history and contained shortcut keys", idleTerminal.logHeight <= 200 && idleTerminal.shortcutCount === 9 && idleTerminal.shortcutsContained && !idleTerminal.documentOverflow, idleTerminal);
+  await mobilePage.getByRole("button", { name: "Need help?" }).click();
+  const mobileModeMap = await mobilePage.evaluate(() => {
+    const stages = [...document.querySelectorAll(".task-details.open .mode-map-stage > span")].map((element) => {
+      const rect = element.getBoundingClientRect();
+      const label = element.querySelector("small");
+      return { width: rect.width, labelHeight: label?.getBoundingClientRect().height ?? 0, lineHeight: Number.parseFloat(getComputedStyle(label).lineHeight) || 0 };
+    });
+    return { count: stages.length, stages };
+  });
+  check("mobile CLI mode map uses readable full-width stages", mobileModeMap.count === 4 && mobileModeMap.stages.every((stage) => stage.width >= 250 && stage.labelHeight <= Math.max(20, stage.lineHeight * 1.5)), mobileModeMap);
+  await mobilePage.getByRole("button", { name: "Close navigation help" }).click();
   await mobileInput.focus();
   await mobilePage.evaluate(() => window.__cliRushSetVisualViewport(430));
   await mobilePage.waitForFunction(() => document.documentElement.dataset.keyboardOpen === "true");
@@ -184,26 +219,60 @@ try {
   const keyboard = await mobilePage.evaluate(() => {
     const element = document.querySelector(".terminal input");
     const rect = element?.getBoundingClientRect();
+    const terminal = document.querySelector(".terminal-panel > .terminal")?.getBoundingClientRect();
+    const log = document.querySelector(".terminal-panel > .terminal > .log")?.getBoundingClientRect();
     const form = document.querySelector(".terminal form")?.getBoundingClientRect();
     const status = document.querySelector(".command-status")?.getBoundingClientRect();
     const shell = document.querySelector(".shell")?.getBoundingClientRect();
+    const headerControls = [...document.querySelectorAll("header > .mobile-back, header > .brand, header > .mobile-activity, header > .controls")].map((element) => {
+      const controlRect = element.getBoundingClientRect();
+      return { width: controlRect.width, height: controlRect.height, top: controlRect.top, bottom: controlRect.bottom, visible: getComputedStyle(element).visibility === "visible" && getComputedStyle(element).display !== "none" };
+    });
     const taskDisplay = getComputedStyle(document.querySelector(".task-panel")).display;
     return {
-      reachable: Boolean(rect && rect.top >= 0 && rect.bottom <= 430),
-      formContained: Boolean(form && form.bottom <= 430),
+      reachable: Boolean(rect && rect.height >= 48 && rect.top >= 0 && rect.bottom <= 430),
+      terminalVisible: Boolean(terminal && terminal.height >= 250),
+      historyVisible: Boolean(log && log.height >= 50),
+      formContained: Boolean(form && form.height >= 140 && form.bottom <= 430),
       statusContained: Boolean(status && status.bottom <= 430),
       shellContained: Boolean(shell && shell.bottom <= 431),
+      headerControlsVisible: headerControls.length === 4 && headerControls.every((control) => control.visible && control.width > 0 && control.height > 0 && control.top >= 0 && control.bottom <= 70),
+      headerControls,
       taskHidden: taskDisplay === "none",
       overflow: document.documentElement.scrollWidth > innerWidth + 1,
       innerHeight,
       visualHeight: window.visualViewport?.height,
     };
   });
-  check("software keyboard gives the terminal the visible iPhone viewport", keyboard.reachable && keyboard.formContained && keyboard.statusContained && keyboard.shellContained && keyboard.taskHidden && !keyboard.overflow, keyboard);
+  check("software keyboard gives the terminal the visible iPhone viewport", keyboard.reachable && keyboard.terminalVisible && keyboard.historyVisible && keyboard.formContained && keyboard.statusContained && keyboard.shellContained && keyboard.headerControlsVisible && keyboard.taskHidden && !keyboard.overflow, keyboard);
   await mobilePage.screenshot({ path: resolve(outputDirectory, "interaction-mobile-keyboard.png"), fullPage: false });
   await mobilePage.evaluate(() => window.__cliRushSetVisualViewport(844));
   await mobilePage.waitForFunction(() => document.documentElement.dataset.keyboardOpen !== "true");
   check("closing the software keyboard restores normal viewport sizing", await mobilePage.evaluate(() => !document.documentElement.style.getPropertyValue("--visual-viewport-height")));
+
+  await mobilePage.locator(".brand-link").click();
+  await mobilePage.locator("details.mode-picker > summary").click();
+  await mobilePage.getByRole("button", { name: "Start Easy practice" }).click();
+  const mobileRound = mobilePage.locator(".screen-round");
+  await mobileRound.locator(".terminal input").waitFor();
+  await mobileRound.getByRole("button", { name: "Need help?" }).click();
+  check("Hint and Reveal are explicit mobile buttons", await mobileRound.getByRole("button", { name: "Show hint" }).isVisible() && await mobileRound.getByRole("button", { name: "Reveal answer · no mastery" }).isVisible());
+  await mobileRound.getByRole("button", { name: "Reveal answer · no mastery" }).click();
+  const mobileAnswer = (await mobileRound.locator(".reveal-bundle code.revealed").textContent())?.trim() ?? "";
+  await mobileRound.locator(".terminal input").fill(mobileAnswer);
+  await mobileRound.locator(".terminal input").press("Enter");
+  await mobileRound.getByRole("button", { name: "Next command", exact: true }).waitFor();
+  const completedAnswer = await mobilePage.evaluate(() => {
+    const next = document.querySelector(".answer-next button")?.getBoundingClientRect();
+    const details = document.querySelector(".task-panel.answer-complete .task-details");
+    return {
+      nextVisible: Boolean(next && next.top >= 0 && next.bottom <= innerHeight),
+      detailsPosition: details ? getComputedStyle(details).position : null,
+      scrollY,
+    };
+  });
+  check("a correct mobile answer keeps Next command immediately reachable without a blocking sheet", completedAnswer.nextVisible && completedAnswer.detailsPosition === "static", completedAnswer);
+  await mobilePage.screenshot({ path: resolve(outputDirectory, "interaction-mobile-complete.png"), fullPage: false });
   await mobile.close();
 
   const standalone = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });

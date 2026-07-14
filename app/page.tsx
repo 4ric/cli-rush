@@ -839,10 +839,10 @@ const CliModeMap = ({ mode }: { mode: CliMode }) => {
     <div className="cli-mode-map" aria-label={`CLI mode map; current mode is ${modeNames[mode]}`}>
       {stages.map((stage, index) => (
         <div className="mode-map-stage" key={stage.id}>
-          {index > 0 && <i aria-hidden="true">→</i>}
           <span className={stage.modes.includes(mode) ? "active" : ""}>
             <small>{stage.label}</small><code>{stage.prompt}</code>
           </span>
+          {index < stages.length - 1 && <i aria-hidden="true">↓</i>}
         </div>
       ))}
     </div>
@@ -2346,6 +2346,7 @@ export default function GameClient() {
   useEffect(() => {
     if (screen === "round" && activeMode === "easy" && easyComplete) {
       setTaskDetailsOpen(true);
+      requestAnimationFrame(() => nextEasyButtonRef.current?.scrollIntoView({ block: "nearest" }));
     }
   }, [activeMode, easyComplete, screen]);
 
@@ -4167,7 +4168,7 @@ export default function GameClient() {
           {timed && <div className="track" role="progressbar" aria-label="Time bank" aria-valuemin={0} aria-valuemax={60} aria-valuenow={Math.min(60, Math.ceil((time ?? 0) / 1000))}><i style={{ width: `${Math.min(100, (time ?? 0) / 600)}%` }} /></div>}
 
           <div className="practice-workspace">
-            <aside className="task-panel">
+            <aside className={`task-panel ${easyComplete ? "answer-complete" : ""}`}>
               <div className="task-summary">
                 <span className="task-kicker">{sessionKind === "daily" ? "Due retrieval" : sessionKind === "chapter" ? "Chapter objective" : "Operational objective"}</span>
                 <h1 id="objective-title">{paused ? "Objective hidden while paused" : item.objective}</h1>
@@ -4190,20 +4191,25 @@ export default function GameClient() {
                     shorthand={currentRevealShorthand}
                   />}
                   {item.topic === "CLI navigation" && <CliModeMap mode={device.mode} />}
-                  <div className="learning-actions">
-                    {assistance === 0 && <button className="secondary" type="button" onClick={() => showAssistance(1)}>Hint: show structure</button>}
-                    {assistance === 1 && <button className="secondary" type="button" onClick={() => showAssistance(2)}>Show command family</button>}
-                    {assistance === 2 && <button className="secondary" type="button" onClick={() => showAssistance(3)}>Reveal answer · no mastery</button>}
+                  <div className="learning-actions assistance-buttons" aria-label="Learning assistance">
+                    <button className="secondary" type="button" onClick={() => showAssistance(assistance === 0 ? 1 : 2)} disabled={assistance >= 2}>
+                      {assistance === 0 ? "Show hint" : assistance === 1 ? "Show another hint" : "Hints shown"}
+                    </button>
+                    <button className="secondary reveal-control" type="button" onClick={() => showAssistance(3)} disabled={assistance === 3}>Reveal answer · no mastery</button>
                   </div>
-                  <ul className="assistance-ledger" aria-label="Assistance used">
-                    <li className={guidedDiscoveryUsed ? "used" : ""}><b>?</b> guided options</li>
-                    <li className={cliAssistanceUsed ? "used" : ""}><b>Tab</b> completion or paste</li>
-                    <li className={assistance > 0 ? "used" : ""}><b>Hint</b> task coaching</li>
-                    <li className={assistance === 3 ? "used" : ""}><b>Reveal</b> full answer</li>
+                  <ul className="assistance-ledger" aria-label="Attempt assistance status">
+                    <li className={guidedDiscoveryUsed ? "used" : ""}><b>?</b><span>guided options</span><em>{guidedDiscoveryUsed ? "used" : "unused"}</em></li>
+                    <li className={cliAssistanceUsed ? "used" : ""}><b>Tab</b><span>completion or paste</span><em>{cliAssistanceUsed ? "used" : "unused"}</em></li>
+                    <li className={assistance > 0 ? "used" : ""}><b>Hint</b><span>task coaching</span><em>{assistance > 0 ? "used" : "unused"}</em></li>
+                    <li className={assistance === 3 ? "used" : ""}><b>Reveal</b><span>full answer</span><em>{assistance === 3 ? "used" : "unused"}</em></li>
                   </ul>
                   {(assistance > 0 || cliAssistanceUsed || guidedDiscoveryUsed) && <p className="assisted-note">{guidedDiscoveryUsed && assistance === 0 && !cliAssistanceUsed ? "Guided discovery is an authentic CLI skill; it schedules an earlier clean-recall check." : "Assisted practice is useful, but this attempt will not advance clean-recall mastery."}</p>}
                 </> : <>
                   <p className="mnemonic">{learningHints.postAnswerMnemonic}</p>
+                  <div className="answer-next">
+                    <button ref={nextEasyButtonRef} className="primary small" type="button" onClick={nextEasyObjective}>Next command</button>
+                    <span>Detailed explanation remains below for review.</span>
+                  </div>
                   <div className="teaching-card">
                     <div><small>Why it matters</small><p>{currentTeaching.purpose}</p></div>
                     <div><small>When to use it</small><p>{currentTeaching.whenToUse}</p></div>
@@ -4216,7 +4222,6 @@ export default function GameClient() {
                     <div><small>Rollback</small><p>{currentTeaching.rollback}</p></div>
                     <div><small>Risk</small><p>{currentTeaching.risk}</p></div>
                   </div>
-                  <button ref={nextEasyButtonRef} className="primary small" type="button" onClick={nextEasyObjective}>Next command</button>
                 </>}
               </div>}
             </aside>
