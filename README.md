@@ -72,7 +72,7 @@ The **Good to know** section is executable safety practice rather than a referen
 - Active practice uses a task-and-terminal split on wider screens. On small screens the terminal remains the main workspace and task detail opens in a bottom sheet.
 - The layout uses safe-area insets, dynamic/visual viewport height, at least 16 px terminal input, 44 px touch targets and an operating-system `prefers-reduced-motion` fallback without a manual Reduce Motion setting.
 - Terminal history and command recall are bounded, and draft input lives in a memoised terminal component so ordinary typing does not parse or persist the full activity state.
-- A local browser-QA harness uses the repository-pinned Playwright Chromium build to check 320×568, 375×667, 390×844, 430×932, 844×390, 768×1024, 1280×720, 1440×900 and 1920×1080 layouts, an axe WCAG scan and a 4×-CPU throttled long-terminal regression. Separate interaction, WebKit, Lighthouse and bounded 30-minute soak harnesses cover keyboard/touch behaviour, standalone resume and long-session resource growth. See the `qa:*` scripts and generated `outputs/browser-qa/` artefacts.
+- A local browser-QA harness uses the repository-pinned Playwright Chromium build to check 320×568, 375×667, 390×844, 430×932, 844×390, 768×1024, 1280×720, 1440×900 and 1920×1080 layouts, an axe WCAG scan and a 4×-CPU throttled long-terminal regression. The responsive traversal additionally opens every home, practice, report, lab, safety and administration screen at seven phone-to-2K sizes. Separate interaction, WebKit, Lighthouse and bounded 30-minute soak harnesses cover software-keyboard geometry, repeated Safari-style scrolling, keyboard/touch behaviour, standalone resume and long-session resource growth. See the `qa:*` scripts and generated `outputs/browser-qa/` artefacts.
 - The correct-command sound is a short local Web Audio sequence with deterministic streak lifts at 3, 5 and 10. The Sound setting persists, and obsolete nodes are stopped before a new reward plays.
 
 ### PWA behaviour
@@ -174,6 +174,7 @@ npm run test:docker
 npm run generate:coverage
 npm run qa:browser
 npm run qa:interaction
+npm run qa:responsive
 npm run qa:webkit
 npm run qa:lighthouse
 npm run qa:soak
@@ -188,6 +189,7 @@ For the production QA profile, keep `npm run qa:serve:production` running in one
 $env:CLI_RUSH_QA_URL = "http://127.0.0.1:4174"
 npm run qa:browser
 npm run qa:interaction
+npm run qa:responsive
 npm run qa:webkit
 npm run qa:lighthouse
 $env:CLI_RUSH_QA_SOAK_MINUTES = "30"

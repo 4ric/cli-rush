@@ -145,23 +145,65 @@ try {
   await desktop.close();
 
   const mobile = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  await mobile.addInitScript(() => {
+    const state = { height: 844, offsetTop: 0 };
+    const listeners = new Map();
+    const visualViewport = {
+      get height() { return state.height; },
+      get offsetTop() { return state.offsetTop; },
+      get width() { return 390; },
+      get offsetLeft() { return 0; },
+      get pageLeft() { return 0; },
+      get pageTop() { return 0; },
+      get scale() { return 1; },
+      addEventListener(type, listener) {
+        if (!listeners.has(type)) listeners.set(type, new Set());
+        listeners.get(type).add(listener);
+      },
+      removeEventListener(type, listener) { listeners.get(type)?.delete(listener); },
+    };
+    Object.defineProperty(window, "visualViewport", { configurable: true, value: visualViewport });
+    Object.defineProperty(window, "__cliRushSetVisualViewport", {
+      configurable: true,
+      value: (height, offsetTop = 0) => {
+        state.height = height;
+        state.offsetTop = offsetTop;
+        for (const listener of listeners.get("resize") ?? []) listener(new Event("resize"));
+      },
+    });
+  });
   const mobilePage = await mobile.newPage();
   await mobilePage.goto(baseUrl, { waitUntil: "networkidle" });
   await mobilePage.locator(".continue-card .primary").click();
   const mobileInput = mobilePage.locator(".terminal input");
   await mobileInput.waitFor();
-  const mobileCdp = await mobile.newCDPSession(mobilePage);
   await mobileInput.focus();
-  await mobileCdp.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 500, screenWidth: 390, screenHeight: 844, deviceScaleFactor: 1, mobile: true });
+  await mobilePage.evaluate(() => window.__cliRushSetVisualViewport(430));
+  await mobilePage.waitForFunction(() => document.documentElement.dataset.keyboardOpen === "true");
   await mobilePage.waitForTimeout(250);
   const keyboard = await mobilePage.evaluate(() => {
     const element = document.querySelector(".terminal input");
-    element?.scrollIntoView({ block: "nearest" });
     const rect = element?.getBoundingClientRect();
-    return { reachable: Boolean(rect && rect.top >= 0 && rect.bottom <= innerHeight), overflow: document.documentElement.scrollWidth > innerWidth + 1 };
+    const form = document.querySelector(".terminal form")?.getBoundingClientRect();
+    const status = document.querySelector(".command-status")?.getBoundingClientRect();
+    const shell = document.querySelector(".shell")?.getBoundingClientRect();
+    const taskDisplay = getComputedStyle(document.querySelector(".task-panel")).display;
+    return {
+      reachable: Boolean(rect && rect.top >= 0 && rect.bottom <= 430),
+      formContained: Boolean(form && form.bottom <= 430),
+      statusContained: Boolean(status && status.bottom <= 430),
+      shellContained: Boolean(shell && shell.bottom <= 431),
+      taskHidden: taskDisplay === "none",
+      overflow: document.documentElement.scrollWidth > innerWidth + 1,
+      innerHeight,
+      visualHeight: window.visualViewport?.height,
+    };
   });
-  check("software-keyboard-sized viewport keeps input reachable", keyboard.reachable && !keyboard.overflow, keyboard);
+  check("software keyboard gives the terminal the visible iPhone viewport", keyboard.reachable && keyboard.formContained && keyboard.statusContained && keyboard.shellContained && keyboard.taskHidden && !keyboard.overflow, keyboard);
   await mobilePage.screenshot({ path: resolve(outputDirectory, "interaction-mobile-keyboard.png"), fullPage: false });
+  await mobilePage.evaluate(() => window.__cliRushSetVisualViewport(844));
+  await mobilePage.waitForFunction(() => document.documentElement.dataset.keyboardOpen !== "true");
+  check("closing the software keyboard restores normal viewport sizing", await mobilePage.evaluate(() => !document.documentElement.style.getPropertyValue("--visual-viewport-height")));
   await mobile.close();
 
   const standalone = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });

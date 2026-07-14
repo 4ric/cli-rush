@@ -927,3 +927,93 @@ html,body{background:var(--bg)}
 
 .reveal-bundle{display:grid;gap:.75rem;margin-top:.65rem;padding:.85rem;border:1px solid rgba(255,184,109,.35);border-radius:14px;background:rgba(255,184,109,.055);overflow-wrap:anywhere}
 .reveal-bundle>div{min-width:0}.reveal-bundle p{margin:.28rem 0 0}.reveal-bundle code{white-space:pre-wrap;overflow-wrap:anywhere}.shorthand-list{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.35rem}
+
+/* Smooth-scroll and compact-workspace release pass. The decorative layer moves
+   with the document instead of invalidating a fixed masked texture on Safari. */
+.shell{overflow-y:visible}
+.shell>header{z-index:30}
+.grid-bg{position:absolute;-webkit-mask-image:none;mask-image:none;opacity:.28}
+.task-summary h1,.task-details{overflow-wrap:anywhere}
+.task-details,.terminal>.log{-webkit-overflow-scrolling:touch}
+.task-help{display:grid;gap:10px;margin-top:14px;padding-top:14px;border-top:1px solid rgba(177,184,255,.14)}
+.task-help>.task-kicker,.task-help>strong{display:block}
+.task-help>strong{color:#fff;font-size:16px;line-height:1.35}
+.task-help>p{margin:0;color:#c1c3d5;font-size:14px;line-height:1.55}
+.task-help>code{display:block;padding:9px 10px;overflow-wrap:anywhere;border:1px solid rgba(255,180,92,.22);border-radius:9px;background:#080b19;color:#ffca72;font:600 14px/1.5 var(--font-geist-mono);white-space:normal}
+.task-help>button{width:100%;margin:0}
+.assistance-state{display:block;padding:9px;border-radius:8px;background:rgba(255,180,92,.08);color:#ffca72;font-size:14px}
+.lesson-detail{display:grid;gap:8px;margin-top:14px}
+.lesson-detail>div{padding:11px;border:1px solid var(--line);border-radius:10px;background:rgba(9,11,26,.55)}
+.lesson-detail p{margin:6px 0 0;color:#c1c3d5;font-size:14px;line-height:1.5}
+.lesson-detail.accepted>div{border-color:rgba(130,144,255,.28)}
+.lesson-detail.rejected>div{border-color:rgba(255,95,125,.28)}
+
+@media(min-width:901px){
+  .practice-workspace{grid-template-columns:clamp(380px,30vw,420px) minmax(0,1fr)}
+  .terminal form{min-height:60px;flex:0 0 60px;flex-wrap:nowrap}
+  .terminal form>.terminal-shortcuts{display:none}
+}
+
+/* The 480px history target fits at 1440 × 900, but not inside browser
+   viewports in the 820–889px band. Let flexbox allocate that shorter space. */
+@media(min-width:901px) and (min-height:820px) and (max-height:889px){
+  .terminal>.log{min-height:240px}
+}
+@media(min-width:901px) and (min-height:890px){
+  .terminal>.log{min-height:480px}
+}
+
+@media(max-width:760px){
+  .grid-bg{display:none}
+  .shell{background:linear-gradient(180deg,#101329 0,#090b18 34rem)}
+  .continue-card,.due-recall-card,.home-streamlined .dashboard-card,.home-streamlined .labs-library,
+  .terminal,.command-status{box-shadow:none}
+  .task-details{display:none;transform:none;visibility:visible;transition:none}
+  .task-details.open{display:block;transform:none;visibility:visible;transition:none}
+
+  html[data-keyboard-open="true"] .screen-navigation header,
+  html[data-keyboard-open="true"] .screen-round header,
+  html[data-keyboard-open="true"] .screen-scenario header,
+  html[data-keyboard-open="true"] .screen-guided-lab header{
+    min-height:54px;
+    padding-top:max(var(--safe-top),4px);
+    padding-bottom:4px;
+  }
+  html[data-keyboard-open="true"] .mobile-activity span{display:none}
+  html[data-keyboard-open="true"] .game{padding-top:3px;padding-bottom:calc(3px + var(--safe-bottom))}
+  html[data-keyboard-open="true"] .activity-bar,
+  html[data-keyboard-open="true"] .task-panel{display:none}
+  html[data-keyboard-open="true"] .task-details{display:none}
+  html[data-keyboard-open="true"] .practice-workspace{gap:0;padding-top:2px}
+  html[data-keyboard-open="true"] .terminal-panel{min-height:0}
+  html[data-keyboard-open="true"] .terminal-panel>.terminal{min-height:0;flex:1 1 0}
+  html[data-keyboard-open="true"] .terminal-head{min-height:36px;height:36px;flex:0 0 36px}
+  html[data-keyboard-open="true"] .terminal>.log{min-height:76px;flex:1 1 auto;padding:7px 10px}
+  html[data-keyboard-open="true"] .terminal form{min-height:116px;flex:0 0 116px;margin:0 5px 5px}
+  html[data-keyboard-open="true"] .command-status{min-height:44px;flex:0 0 auto;margin-top:4px;padding:5px 9px}
+  html[data-keyboard-open="true"] .command-status span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+}
+
+/* A 568px-tall phone has just enough room for the complete two-row touch
+   command form when the idle history is compact. Once the keyboard opens,
+   the dedicated keyboard layout below takes over and grows the history. */
+@media(max-width:760px) and (max-height:620px){
+  .activity-bar,.current-context{display:none}
+  .terminal>.log{min-height:80px}
+}
+@media(orientation:landscape) and (max-height:560px){
+  .terminal>.log{min-height:42px}
+}
+
+@media(hover:none){
+  .primary:hover,.mode-card:hover,.dashboard-card:hover,.lab-list .lab-card:hover{filter:none;transform:none;box-shadow:none}
+}
+
+/* iOS Safari is especially sensitive to large translucent shadows and masked
+   page-sized layers while the URL bars are expanding and collapsing. */
+@supports(-webkit-touch-callout:none){
+  .grid-bg{display:none}
+  .shell{background:linear-gradient(180deg,#101329 0,#090b18 40rem)}
+  .continue-card,.due-recall-card,.home-streamlined .dashboard-card,.home-streamlined .labs-library,
+  .terminal,.command-status{box-shadow:none}
+}

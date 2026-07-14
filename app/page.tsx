@@ -488,36 +488,64 @@ function useStableCallback<Args extends unknown[], Result>(callback: (...args: A
 
 const useViewportEnvironment = () => {
   const [keyboardOpen, setKeyboardOpen] = useState(false);
+  const keyboardOpenRef = useRef(false);
 
   useEffect(() => {
     const root = document.documentElement;
     const standaloneQuery = window.matchMedia("(display-mode: standalone)");
+    let viewportFrame = 0;
     const updateStandalone = () => {
       const iosStandalone = "standalone" in navigator && Boolean((navigator as Navigator & { standalone?: boolean }).standalone);
       root.dataset.standalone = standaloneQuery.matches || iosStandalone ? "true" : "false";
     };
     const updateViewport = () => {
-      const viewport = window.visualViewport;
-      const height = viewport?.height ?? window.innerHeight;
-      const offsetTop = viewport?.offsetTop ?? 0;
-      const obscured = Math.max(0, window.innerHeight - height - offsetTop);
-      root.style.setProperty("--visual-viewport-height", `${height}px`);
-      root.style.setProperty("--keyboard-offset", `${obscured}px`);
-      const nextKeyboardOpen = obscured > 120 && document.activeElement?.tagName === "INPUT";
-      root.dataset.keyboardOpen = nextKeyboardOpen ? "true" : "false";
-      setKeyboardOpen(nextKeyboardOpen);
+      cancelAnimationFrame(viewportFrame);
+      viewportFrame = requestAnimationFrame(() => {
+        const viewport = window.visualViewport;
+        const height = viewport?.height ?? window.innerHeight;
+        const offsetTop = Math.max(0, viewport?.offsetTop ?? 0);
+        const obscured = Math.max(0, window.innerHeight - height - offsetTop);
+        const focused = document.activeElement instanceof HTMLInputElement
+          && Boolean(document.activeElement.closest(".terminal"));
+        const nextKeyboardOpen = focused && obscured > 120;
+
+        // Dynamic viewport units handle browser chrome while the keyboard is
+        // closed. Writing a root variable during every Safari scroll forces a
+        // full-page repaint, so use the measured visual viewport only for the
+        // terminal's genuine software-keyboard state.
+        if (nextKeyboardOpen) {
+          root.style.setProperty("--visual-viewport-height", `${Math.round(height)}px`);
+          root.style.setProperty("--keyboard-offset", `${Math.round(obscured)}px`);
+        } else {
+          root.style.removeProperty("--visual-viewport-height");
+          root.style.removeProperty("--keyboard-offset");
+        }
+        root.dataset.keyboardOpen = nextKeyboardOpen ? "true" : "false";
+        if (keyboardOpenRef.current !== nextKeyboardOpen) {
+          keyboardOpenRef.current = nextKeyboardOpen;
+          setKeyboardOpen(nextKeyboardOpen);
+        }
+      });
     };
+    const updateAfterFocus = () => setTimeout(updateViewport, 0);
     updateStandalone();
     updateViewport();
     standaloneQuery.addEventListener?.("change", updateStandalone);
     window.visualViewport?.addEventListener("resize", updateViewport);
-    window.visualViewport?.addEventListener("scroll", updateViewport);
     window.addEventListener("resize", updateViewport);
+    window.addEventListener("orientationchange", updateViewport);
+    document.addEventListener("focusin", updateAfterFocus);
+    document.addEventListener("focusout", updateAfterFocus);
     return () => {
+      cancelAnimationFrame(viewportFrame);
       standaloneQuery.removeEventListener?.("change", updateStandalone);
       window.visualViewport?.removeEventListener("resize", updateViewport);
-      window.visualViewport?.removeEventListener("scroll", updateViewport);
       window.removeEventListener("resize", updateViewport);
+      window.removeEventListener("orientationchange", updateViewport);
+      document.removeEventListener("focusin", updateAfterFocus);
+      document.removeEventListener("focusout", updateAfterFocus);
+      root.style.removeProperty("--visual-viewport-height");
+      root.style.removeProperty("--keyboard-offset");
       delete root.dataset.keyboardOpen;
     };
   }, []);
@@ -4027,7 +4055,7 @@ export default function GameClient() {
           <button className="sound-control" aria-pressed={!progress.muted} onClick={toggleSound}>
             {progress.muted ? "Sound off" : "Sound on"}
           </button>
-          <details className="account-menu">
+          <details key={screen} className="account-menu">
             <summary>Account</summary>
             <div>
               <span className="saved">● {serverBacked

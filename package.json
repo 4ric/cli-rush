@@ -17,6 +17,7 @@
     "qa:browser": "node scripts/browser-qa.mjs",
     "qa:interaction": "node scripts/interaction-qa.mjs",
     "qa:lighthouse": "node scripts/lighthouse-qa.mjs",
+    "qa:responsive": "node scripts/responsive-audit.mjs",
     "qa:soak": "node scripts/terminal-soak-qa.mjs",
     "qa:webkit": "node scripts/webkit-qa.mjs",
     "qa:serve:production": "node scripts/production-qa-server.mjs",

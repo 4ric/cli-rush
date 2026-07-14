@@ -139,6 +139,7 @@ test("active workspace keeps input local, restores routes and responds to the vi
   assert.match(page, /const TerminalCommandInput = memo\(forwardRef/u);
   assert.match(page, /const \[draft, setDraft\] = useState\(initialValue\)/u);
   assert.match(page, /window\.visualViewport/u);
+  assert.doesNotMatch(page, /visualViewport\?\.addEventListener\(["']scroll["']/u);
   assert.match(page, /window\.addEventListener\(["']popstate["']/u);
   assert.match(page, /window\.addEventListener\(["']pagehide["']/u);
   assert.match(page, /restoreDeviceState\(candidate\.device\)/u);
@@ -182,4 +183,6 @@ test("active workspace keeps input local, restores routes and responds to the vi
   assert.match(styles, /\.screen-navigation/u);
   assert.match(styles, /\.shell button,\.shell summary\{min-width:44px;min-height:44px\}/u);
   assert.match(styles, /\.terminal form>\.terminal-shortcuts/u);
+  assert.match(styles, /\.grid-bg\{position:absolute;[^}]*mask-image:none/u);
+  assert.match(styles, /data-keyboard-open=["']true["'][^{}]+\.task-panel\{display:none\}/su);
 });
