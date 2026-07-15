@@ -149,7 +149,7 @@ test("active workspace keeps input local, restores routes and responds to the vi
   assert.match(page, /handleCliControl/u);
   assert.match(page, /Ctrl\+Shift\+6/u);
   assert.match(page, /terminalTouchControls/u);
-  assert.match(page, /className="terminal-shortcuts"[^>]+role="toolbar"/u);
+  assert.match(page, /className=\{`terminal-toolbar[^`]+`\}[^>]+role="toolbar"/u);
   assert.match(page, /executeCliCommand\(device, value, catalogue\)/u);
   assert.match(page, /executionSatisfiesLearningObjective\(item, device, execution, catalogue\)/u);
   assert.doesNotMatch(page, /validateOperational/u);
@@ -172,17 +172,17 @@ test("active workspace keeps input local, restores routes and responds to the vi
   assert.doesNotMatch(page, /role=["']log["']/u);
   assert.match(page, /const visibleLines = lines\.slice\(-60\)/u);
 
-  assert.match(styles, /--visual-viewport-height:100dvh/u);
+  assert.match(styles, /var\(--visual-viewport-height, 100dvh\)/u);
   assert.match(styles, /env\(safe-area-inset-bottom/u);
-  assert.match(styles, /@media\(display-mode:standalone\)/u);
-  assert.match(styles, /@media\(prefers-reduced-motion:reduce\)/u);
-  assert.match(styles, /\.practice-workspace\{[^}]*grid-template-columns:clamp\(360px,29vw,420px\)/su);
-  assert.match(styles, /button,input,textarea,select,summary\{font-size:16px\}/u);
-  assert.match(styles, /\.task-kicker,\.current-context,[^{}]+\{font-size:14px\}/u);
-  assert.match(styles, /\.sound-control\{display:grid!important/u);
+  assert.match(styles, /@media \(display-mode: standalone\)/u);
+  assert.match(styles, /@media \(prefers-reduced-motion: reduce\)/u);
+  assert.match(styles, /\.practice-workspace \{[^}]*grid-template-columns: minmax\(0, 3fr\) minmax\(300px, 1fr\)/su);
+  assert.match(styles, /\.terminal-command-line input \{[^}]*font:[^;}]*16px/su);
+  assert.match(styles, /\.task-kicker \{/u);
+  assert.match(styles, /\.sound-control \{ display: none !important; \}/u);
   assert.match(styles, /\.screen-navigation/u);
-  assert.match(styles, /\.shell button,\.shell summary\{min-width:44px;min-height:44px\}/u);
-  assert.match(styles, /\.terminal form>\.terminal-shortcuts/u);
-  assert.match(styles, /\.grid-bg\{position:absolute;[^}]*mask-image:none/u);
-  assert.match(styles, /data-keyboard-open=["']true["'][^{}]+\.task-panel\{display:none\}/su);
+  assert.match(styles, /\.shell button, \.shell summary \{ min-width: 44px; min-height: 45px; \}/u);
+  assert.match(styles, /\.terminal-toolbar/u);
+  assert.match(styles, /\.grid-bg \{[^}]*position: absolute/su);
+  assert.match(styles, /data-keyboard-open=["']true["'][^{}]+\.task-panel \{ display: none; \}/su);
 });

@@ -47,7 +47,7 @@ try {
       await page.locator("details.good-to-know > summary").click();
       await page.evaluate(() => scrollTo(0, 0));
     }
-    await page.locator(".continue-card .primary").click();
+    await page.locator(".practice-option.recommended").click();
     const input = page.locator(".terminal input");
     await input.waitFor();
     await input.fill("en");

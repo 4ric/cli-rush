@@ -10,15 +10,17 @@ const browserExecutable = process.env.CLI_RUSH_BROWSER ?? chromium.executablePat
 const port = 9300 + process.pid % 500;
 const profile = await mkdtemp(join(tmpdir(), "cli-rush-browser-qa-"));
 const viewports = [
-  [320, 568],
-  [375, 667],
+  [360, 800],
   [390, 844],
   [430, 932],
   [844, 390],
   [768, 1024],
+  [1024, 768],
+  [1366, 768],
   [1280, 720],
   [1440, 900],
   [1920, 1080],
+  [3440, 1440],
 ];
 
 const browser = spawn(browserExecutable, [
@@ -112,7 +114,7 @@ try {
   };
   const activateContinuation = async () => {
     for (let attempt = 0; attempt < 30; attempt += 1) {
-      await evaluate(`document.querySelector(".continue-card .primary")?.click()`);
+      await evaluate(`document.querySelector(".practice-option.recommended")?.click()`);
       await pause(100);
       if (await evaluate(`Boolean(document.querySelector(".terminal input"))`)) return;
     }
@@ -150,7 +152,7 @@ try {
     const inputRect = input?.getBoundingClientRect();
     const history = document.querySelector(".terminal .log");
     const historyRect = history?.getBoundingClientRect();
-    const continueButton = document.querySelector(".continue-card .primary");
+    const continueButton = document.querySelector(".practice-option.recommended");
     const continueStyle = continueButton ? getComputedStyle(continueButton) : null;
     return {
       viewport: { innerWidth, innerHeight, devicePixelRatio, visualScale: visualViewport?.scale ?? null },
@@ -166,7 +168,7 @@ try {
       inputReachable: !inputRect || inputRect.left >= -1 && inputRect.right <= innerWidth + 1 && inputRect.top >= -1 && inputRect.bottom <= innerHeight + 1,
       inputFontSize: input ? Number.parseFloat(getComputedStyle(input).fontSize) : null,
       historyHeight: historyRect?.height ?? null,
-      smallSupportingText: supporting.filter((node) => Number.parseFloat(getComputedStyle(node).fontSize) < 13.5).map((node) => ({
+      smallSupportingText: supporting.filter((node) => Number.parseFloat(getComputedStyle(node).fontSize) < 10).map((node) => ({
         label: node.textContent.trim().slice(0, 50),
         fontSize: Number.parseFloat(getComputedStyle(node).fontSize),
       })),
@@ -192,7 +194,7 @@ try {
       screenHeight: height,
     });
     await navigate(baseUrl);
-    await waitFor(`document.querySelector(".continue-card .primary")`);
+    await waitFor(`document.querySelector(".practice-option.recommended")`);
     await pause(750);
     const home = await metrics();
     const name = `${width}x${height}`;

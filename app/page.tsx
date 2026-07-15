@@ -3,6 +3,7 @@
 
 import {
   type KeyboardEvent,
+  type ReactNode,
   type RefObject,
   forwardRef,
   memo,
@@ -260,13 +261,7 @@ const terminalTouchControls: ReadonlyArray<{
 }> = [
   { key: "ArrowUp", label: "↑", description: "Recall the previous command" },
   { key: "ArrowDown", label: "↓", description: "Recall the next command" },
-  { key: "Ctrl+A", label: "^A", description: "Move to the start of the line" },
-  { key: "Ctrl+E", label: "^E", description: "Move to the end of the line" },
-  { key: "Ctrl+U", label: "^U", description: "Delete from the cursor to the start" },
-  { key: "Ctrl+W", label: "^W", description: "Delete the previous word" },
   { key: "Ctrl+C", label: "^C", description: "Cancel the current line" },
-  { key: "Ctrl+Z", label: "^Z", description: "Return to Privileged EXEC" },
-  { key: "Ctrl+Shift+6", label: "^⇧6", description: "Interrupt the current operation" },
 ];
 
 /**
@@ -302,6 +297,7 @@ const TerminalCommandInput = memo(forwardRef<TerminalInputHandle, TerminalInputP
   resetKey,
 }, forwardedRef) {
   const [draft, setDraft] = useState(initialValue);
+  const [toolbarOpen, setToolbarOpen] = useState(true);
   const fieldRef = useRef<HTMLInputElement>(null);
   const previousResetKey = useRef(resetKey);
 
@@ -393,7 +389,7 @@ const TerminalCommandInput = memo(forwardRef<TerminalInputHandle, TerminalInputP
   };
 
   return (
-    <form onSubmit={(event) => {
+    <form className="terminal-input" onSubmit={(event) => {
       event.preventDefault();
       if (disabled) return;
       const submitted = draft;
@@ -401,46 +397,52 @@ const TerminalCommandInput = memo(forwardRef<TerminalInputHandle, TerminalInputP
       if (submitted.trim()) setDraft("");
     }}>
       <label className="sr" htmlFor={id}>{promptText} · {accessibleContext} command input</label>
-      <span aria-hidden="true">{promptText}</span>
-      <input
-        id={id}
-        ref={fieldRef}
-        value={draft}
-        onChange={(event) => {
-          const value = event.target.value;
-          if (value.endsWith("?")) {
-            const preserved = value.slice(0, -1);
-            setDraft(preserved);
-            onHelp(preserved);
-            focusAtEnd();
-            return;
-          }
-          setDraft(value);
-        }}
-        onKeyDown={keys}
-        onPaste={(event) => {
-          event.preventDefault();
-          insertClipboard(event.clipboardData.getData("text"));
-        }}
-        onContextMenu={(event) => {
-          if (!navigator.clipboard?.readText) return;
-          event.preventDefault();
-          void navigator.clipboard.readText().then(insertClipboard).catch(() => onClipboardError?.());
-        }}
-        aria-label={`${promptText} · ${accessibleContext} command input`}
-        aria-keyshortcuts="Tab ? ArrowUp ArrowDown Enter Control+A Control+E Control+U Control+W Control+C Control+Z Control+Shift+6"
-        autoCapitalize="none"
-        autoComplete="off"
-        autoCorrect="off"
-        enterKeyHint="send"
-        spellCheck={false}
-        maxLength={256}
-        disabled={disabled}
-      />
-      <button className="cli-assist" type="button" onClick={() => replaceDraft(onTab(draft))} disabled={disabled} aria-label="Complete the current token with Tab">Tab</button>
-      <button className="cli-assist" type="button" onClick={() => { onHelp(draft); focusAtEnd(); }} disabled={disabled} aria-label="Show commands available at this prompt">?</button>
-      <button type="submit" disabled={disabled}>Run</button>
-      <div className="terminal-shortcuts" role="toolbar" aria-label="Terminal keyboard shortcuts">
+      <div className="terminal-command-line">
+        <span aria-hidden="true">{promptText}</span>
+        <input
+          id={id}
+          ref={fieldRef}
+          value={draft}
+          onChange={(event) => {
+            const value = event.target.value;
+            if (value.endsWith("?")) {
+              const preserved = value.slice(0, -1);
+              setDraft(preserved);
+              onHelp(preserved);
+              focusAtEnd();
+              return;
+            }
+            setDraft(value);
+          }}
+          onKeyDown={keys}
+          onPaste={(event) => {
+            event.preventDefault();
+            insertClipboard(event.clipboardData.getData("text"));
+          }}
+          onContextMenu={(event) => {
+            if (!navigator.clipboard?.readText) return;
+            event.preventDefault();
+            void navigator.clipboard.readText().then(insertClipboard).catch(() => onClipboardError?.());
+          }}
+          aria-label={`${promptText} · ${accessibleContext} command input`}
+          aria-keyshortcuts="Tab ? ArrowUp ArrowDown Enter Control+A Control+E Control+U Control+W Control+C Control+Z Control+Shift+6"
+          autoCapitalize="none"
+          autoComplete="off"
+          autoCorrect="off"
+          enterKeyHint="send"
+          spellCheck={false}
+          maxLength={256}
+          disabled={disabled}
+        />
+        <button className="run-command" type="submit" disabled={disabled}>Run</button>
+      </div>
+      <div className={`terminal-toolbar ${toolbarOpen ? "open" : ""}`} role="toolbar" aria-label="Command assistance and history">
+        <button className="toolbar-toggle" type="button" aria-expanded={toolbarOpen} onClick={() => setToolbarOpen((open) => !open)}>
+          {toolbarOpen ? "Hide keys" : "Keys"}
+        </button>
+        <div className="toolbar-actions">
+          <button className="cli-assist" type="button" onClick={() => replaceDraft(onTab(draft))} disabled={disabled} aria-label="Complete the current token with Tab">Tab</button>
+          <button className="cli-assist" type="button" onClick={() => { onHelp(draft); focusAtEnd(); }} disabled={disabled} aria-label="Show commands available at this prompt">?</button>
         {terminalTouchControls.map((control) => <button
           key={control.key}
           className="terminal-shortcut"
@@ -453,6 +455,7 @@ const TerminalCommandInput = memo(forwardRef<TerminalInputHandle, TerminalInputP
             replaceDraft(next.draft, next.cursor);
           }}
         >{control.label}</button>)}
+        </div>
       </div>
     </form>
   );
@@ -849,6 +852,25 @@ const CliModeMap = ({ mode }: { mode: CliMode }) => {
   );
 };
 
+const PracticeWorkspace = ({ children }: { children: ReactNode }) => {
+  const [contextCollapsed, setContextCollapsed] = useState(false);
+  return (
+    <div className={`practice-workspace ${contextCollapsed ? "context-collapsed" : ""}`}>
+      <button
+        className="workspace-context-toggle"
+        type="button"
+        aria-expanded={!contextCollapsed}
+        aria-label={contextCollapsed ? "Open learning context" : "Collapse learning context"}
+        onClick={() => setContextCollapsed((collapsed) => !collapsed)}
+      >
+        <span aria-hidden="true">{contextCollapsed ? "‹" : "›"}</span>
+        <b>{contextCollapsed ? "Learn" : "Hide"}</b>
+      </button>
+      {children}
+    </div>
+  );
+};
+
 const ScenarioTopology = ({ state }: { state: Ipv4ScenarioState }) => {
   const interfaceReady = state.interfaceState.adminUp && state.interfaceState.address !== null;
   const routeReady = state.defaultRoute === state.parameters.gateway;
@@ -1117,7 +1139,7 @@ const NavigationPractice = ({ keyboardOpen, onHome, onEvidence }: { keyboardOpen
 
   return <section className="game navigation-practice">
     <div className="activity-bar"><span>CLI Navigation</span><strong>{scheduler.completed} completed</strong><span>{scheduler.profileId === "router-ios-xe" ? "Router" : "Catalyst switch"} · {modeNames[device.context]}</span></div>
-    <div className="practice-workspace">
+    <PracticeWorkspace>
       <aside className="task-panel">
         <div className="task-summary">
           <span className="task-kicker">Current task</span>
@@ -1171,7 +1193,7 @@ const NavigationPractice = ({ keyboardOpen, onHome, onEvidence }: { keyboardOpen
         <div className={`command-status ${feedback.tone}`} role="status" aria-live="polite" aria-atomic="true"><strong>{feedback.title}</strong><span>{feedback.message}</span></div>
         <p className="help">Tab and ? use the full prompt grammar · ↑/↓ history · Ctrl+A/E/U/W edit · Ctrl+C cancels · Ctrl+Z exits · Ctrl+Shift+6 interrupts</p>
       </div>
-    </div>
+    </PracticeWorkspace>
   </section>;
 };
 
@@ -1443,7 +1465,7 @@ const GuidedBuildLab = ({ labId, keyboardOpen, onHome, onEvidence }: { labId: De
         <strong>{definition.shortTitle}</strong>
         <span>{state.completed ? `${definition.steps.length} of ${definition.steps.length} completed` : `Step ${state.stepIndex + 1} of ${definition.steps.length} · ${state.stepIndex} completed`}</span>
       </div>
-      <div className="practice-workspace">
+      <PracticeWorkspace>
         <aside className="task-panel">
           <div className="task-summary">
             <span className="task-kicker">{state.completed ? "Lab complete" : `${activePhase} · current task`}</span>
@@ -1507,7 +1529,7 @@ const GuidedBuildLab = ({ labId, keyboardOpen, onHome, onEvidence }: { labId: De
           </div>
           <p className="help">Autosaved locally · {tabUsed || hintLevel ? "Assisted – practise again" : helpUsed ? "Guided discovery" : "Independent recall available"} · Highlight to copy</p>
         </div>
-      </div>
+      </PracticeWorkspace>
     </section>
   );
 };
@@ -1752,7 +1774,7 @@ const GoodToKnowPractice = ({ onHome, onEvidence }: { onHome: () => void; onEvid
       <strong>{session.stepIndex >= goodToKnowLessons.length ? "Complete" : `Exercise ${session.stepIndex + 1} of ${goodToKnowLessons.length}`}</strong>
       <span>IOS XE training router · autosaved locally</span>
     </div>
-    <div className="practice-workspace">
+    <PracticeWorkspace>
       <aside className="task-panel">
         {reviewed ? <div className="task-summary">
           <span className="task-kicker">EXERCISE COMPLETE</span>
@@ -1820,7 +1842,7 @@ const GoodToKnowPractice = ({ onHome, onEvidence }: { onHome: () => void; onEvid
         </div>
         <p className="help">Use ? and Tab without a penalty · Up/Down recalls commands · Highlight to copy · Recovery stays inside the simulator</p>
       </div>
-    </div>
+    </PracticeWorkspace>
   </section>;
 };
 
@@ -2345,7 +2367,7 @@ export default function GameClient() {
 
   useEffect(() => {
     if (screen === "round" && activeMode === "easy" && easyComplete) {
-      setTaskDetailsOpen(true);
+      setTaskDetailsOpen(!window.matchMedia("(max-width: 800px)").matches);
       requestAnimationFrame(() => nextEasyButtonRef.current?.scrollIntoView({ block: "nearest" }));
     }
   }, [activeMode, easyComplete, screen]);
@@ -3939,6 +3961,8 @@ export default function GameClient() {
 
   const dueCount = due(reviews, clockNow).length;
   const nextReview = nextDue(reviews);
+  const cleanRecallCount = Object.values(reviews).filter((review) => (review.cleanRecalls ?? 0) > 0).length;
+  const completedChapterCount = curriculumStates.filter((state) => state.complete).length;
   const toggleSound = () => save({ ...progressRef.current, muted: !progressRef.current.muted });
   const firstGuidedResume = guidedResumes.find((entry) => !entry.completed);
   const continuation = roundResumeAvailable
@@ -3948,6 +3972,7 @@ export default function GameClient() {
         detail: "Your objective, CLI mode and redacted terminal history will return exactly where you stopped.",
         action: resumeSavedRound,
         label: "Continue activity",
+        duration: "2–5 min",
       }
     : scenarioSessionAvailable && scenario.phase !== "complete"
       ? {
@@ -3956,6 +3981,7 @@ export default function GameClient() {
           detail: `${ipv4ScenarioPrompt(scenario)} · ${getIpv4ScenarioObjective(scenario)}`,
           action: resumeIpv4Lab,
           label: "Continue Lab 1",
+          duration: "5–10 min",
         }
       : firstGuidedResume
         ? {
@@ -3964,6 +3990,7 @@ export default function GameClient() {
             detail: getDeviceBuildDefinition(firstGuidedResume.labId).title,
             action: () => openGuidedLab(firstGuidedResume.labId),
             label: `Continue Lab ${getDeviceBuildDefinition(firstGuidedResume.labId).number}`,
+            duration: "5–10 min",
           }
         : {
             eyebrow: "Your next step",
@@ -3971,6 +3998,7 @@ export default function GameClient() {
             detail: "Learn the prompts first, then practise moving between them without getting stranded.",
             action: () => setScreen("navigation"),
             label: navigationSessionAvailable ? "Continue CLI navigation" : "Start CLI navigation",
+            duration: "3–5 min",
           };
 
   const commonError = report
@@ -4073,27 +4101,41 @@ export default function GameClient() {
 
       {screen === "home" && (
         <section className="home home-streamlined">
-          <section className="continue-card" aria-labelledby="continue-title">
-            <div>
-              <p className="eyebrow">{continuation.eyebrow}</p>
-              <h1 id="continue-title">{continuation.title}</h1>
-              <p>{continuation.detail}</p>
+          <section className="practice-hub" aria-labelledby="practice-title">
+            <div className="section-heading">
+              <div><p className="eyebrow">Start here</p><h1 id="practice-title">Choose your next five minutes.</h1></div>
+              <p>The recommended session follows your saved position and recall schedule.</p>
             </div>
-            <button className="primary" type="button" onClick={continuation.action}>{continuation.label}</button>
+            <div className="practice-actions">
+              <button className="practice-option recommended" type="button" onClick={continuation.action}>
+                <span><small>{continuation.eyebrow}</small><strong>{continuation.title}</strong><em>{continuation.detail}</em></span>
+                <b>{continuation.label}<i>{continuation.duration}</i></b>
+              </button>
+              <button className="practice-option" type="button" onClick={dueCount > 0 ? startDailyRecall : () => { chooseMode("easy"); startBeginnerPath(); }}>
+                <span><small>{dueCount > 0 ? "Spaced recall" : "Build your review queue"}</small><strong>{dueCount > 0 ? `${dueCount} review${dueCount === 1 ? "" : "s"} due` : "Beginner recall"}</strong><em>{dueCount > 0 ? "Retrieve without help to extend each interval." : "A clean first recall schedules the next review."}</em></span>
+                <b>{dueCount > 0 ? `Review up to ${Math.min(10, dueCount)}` : "Start Easy"}<i>{dueCount > 0 ? `${Math.max(1, Math.ceil(Math.min(10, dueCount) * 0.35))} min` : "5 min"}</i></b>
+              </button>
+              <button className="practice-option" type="button" onClick={start}>
+                <span><small>Command Rush</small><strong>{selectedRules.label} mode</strong><em>{selectedRules.description}</em></span>
+                <b>{startLabel(selectedMode)}<i>{selectedMode === "easy" ? "Untimed" : "60 sec"}</i></b>
+              </button>
+              <button className="practice-option" type="button" onClick={() => document.getElementById("labs-title")?.scrollIntoView({ behavior: "smooth", block: "start" })}>
+                <span><small>Stateful practice</small><strong>Open Labs</strong><em>Configure, diagnose, verify and recover simulated devices.</em></span>
+                <b>Browse labs<i>{deviceBuildLabs.length + 1} guided labs</i></b>
+              </button>
+            </div>
           </section>
 
-          {dueCount > 0 ? (
-            <section className="due-recall-card" aria-labelledby="due-title">
-              <div><p className="eyebrow">Due recall · about {Math.max(1, Math.ceil(Math.min(10, dueCount) * 0.35))} min</p><h2 id="due-title">{dueCount} review{dueCount === 1 ? " is" : "s are"} ready</h2><p>Clean retrieval extends the interval. Tab, question-mark help and revealed answers remain useful practice, but do not earn mastery credit.</p></div>
-              <button className="primary small" type="button" onClick={startDailyRecall}>Recall up to {Math.min(10, dueCount)}</button>
-            </section>
-          ) : (
-            <p className="due-empty"><span aria-hidden="true">✓</span><strong>No reviews due.</strong> {nextReview ? `Next review in ${Math.max(1, Math.ceil((nextReview - clockNow) / 60_000))} min.` : "Independent recall will schedule the first one."}</p>
-          )}
+          <section className="daily-summary" aria-label="Learning progress">
+            <div><small>Due now</small><strong>{dueCount}</strong><span>{nextReview && dueCount === 0 ? `Next in ${Math.max(1, Math.ceil((nextReview - clockNow) / 60_000))} min` : dueCount ? "Ready to review" : "Queue is clear"}</span></div>
+            <div><small>Clean recalls</small><strong>{cleanRecallCount}</strong><span>Commands retrieved unaided</span></div>
+            <div><small>Best streak</small><strong>{progress.bestCombo}</strong><span>Correct commands in a row</span></div>
+            <div><small>Sessions</small><strong>{progress.sessions}</strong><span>Saved on this device</span></div>
+          </section>
 
           <div className="home-learning-grid">
             <article className="dashboard-card curriculum-card">
-              <p className="eyebrow">Beginner path · {curriculumStates.filter((state) => state.complete).length}/{curriculumStates.length} chapters</p>
+              <p className="eyebrow">Learning path · {completedChapterCount}/{curriculumStates.length} chapters</p>
               <h2>{nextChapterState?.chapter.title ?? "Beginner path complete"}</h2>
               <p>{nextChapterState?.chapter.description ?? "All prerequisite chapters have independent recall evidence. Keep them alive through due reviews and practical labs."}</p>
               {nextChapterState && <div className="chapter-progress"><span>{nextChapterState.cleanRecallCount}/{nextChapterState.commandCount} independently recalled</span><i><b style={{ width: `${nextChapterState.commandCount ? (nextChapterState.cleanRecallCount / nextChapterState.commandCount) * 100 : 0}%` }} /></i></div>}
@@ -4101,7 +4143,7 @@ export default function GameClient() {
             </article>
 
             <section className="labs-library" aria-labelledby="labs-title">
-              <div className="labs-library-head"><div><p className="eyebrow">Practical learning</p><h2 id="labs-title">Labs</h2></div><p>Untimed stateful builds with progressive help. Your exact position is saved locally.</p></div>
+              <div className="labs-library-head"><div><p className="eyebrow">Practical learning</p><h2 id="labs-title">Labs</h2></div><p>Untimed, stateful and saved locally.</p></div>
               <ol className="lab-list">
                 <li className="dashboard-card lab-card">
                   <span className="lab-number">01</span>
@@ -4111,6 +4153,10 @@ export default function GameClient() {
                     {scenarioSessionAvailable && <details className="lab-more"><summary>More</summary><button type="button" onClick={restartIpv4Lab}>Restart from the beginning</button></details>}
                   </div>
                 </li>
+              </ol>
+              <details className="additional-labs">
+                <summary>View router and switch build labs</summary>
+                <ol className="lab-list">
                 {deviceBuildLabs.map((lab) => {
                   const savedLab = guidedResumes.find((entry) => entry.labId === lab.id);
                   return <li className="dashboard-card lab-card" key={lab.id}>
@@ -4123,6 +4169,7 @@ export default function GameClient() {
                   </li>;
                 })}
               </ol>
+              </details>
             </section>
           </div>
 
@@ -4167,7 +4214,7 @@ export default function GameClient() {
 
           {timed && <div className="track" role="progressbar" aria-label="Time bank" aria-valuemin={0} aria-valuemax={60} aria-valuenow={Math.min(60, Math.ceil((time ?? 0) / 1000))}><i style={{ width: `${Math.min(100, (time ?? 0) / 600)}%` }} /></div>}
 
-          <div className="practice-workspace">
+          <PracticeWorkspace>
             <aside className={`task-panel ${easyComplete ? "answer-complete" : ""}`}>
               <div className="task-summary">
                 <span className="task-kicker">{sessionKind === "daily" ? "Due retrieval" : sessionKind === "chapter" ? "Chapter objective" : "Operational objective"}</span>
@@ -4175,6 +4222,10 @@ export default function GameClient() {
                 <code className="current-context">{prompt(device)} · {modeNames[device.mode]}</code>
                 <p>{item.topic} · difficulty {item.difficulty}{presentationAttempt > 1 ? ` · try ${presentationAttempt}` : ""}</p>
                 {!paused && <button className="task-details-toggle" type="button" aria-expanded={taskDetailsOpen} onClick={() => setTaskDetailsOpen((open) => !open)}>{easyComplete ? "View explanation" : "Need help?"}</button>}
+                {easyComplete && <div className="answer-next">
+                  <button ref={nextEasyButtonRef} className="primary small" type="button" onClick={nextEasyObjective}>Next command</button>
+                  <span>Continue now, or open the explanation first.</span>
+                </div>}
               </div>
               {!paused && <div className={`task-details ${taskDetailsOpen ? "open" : ""}`}>
                 <div className="task-details-head"><strong>{easyComplete ? "Explanation and real use" : "Learning coach"}</strong><button type="button" onClick={() => { setTaskDetailsOpen(false); inputRef.current?.focusAtEnd(); }} aria-label="Close task details">×</button></div>
@@ -4206,10 +4257,6 @@ export default function GameClient() {
                   {(assistance > 0 || cliAssistanceUsed || guidedDiscoveryUsed) && <p className="assisted-note">{guidedDiscoveryUsed && assistance === 0 && !cliAssistanceUsed ? "Guided discovery is an authentic CLI skill; it schedules an earlier clean-recall check." : "Assisted practice is useful, but this attempt will not advance clean-recall mastery."}</p>}
                 </> : <>
                   <p className="mnemonic">{learningHints.postAnswerMnemonic}</p>
-                  <div className="answer-next">
-                    <button ref={nextEasyButtonRef} className="primary small" type="button" onClick={nextEasyObjective}>Next command</button>
-                    <span>Detailed explanation remains below for review.</span>
-                  </div>
                   <div className="teaching-card">
                     <div><small>Why it matters</small><p>{currentTeaching.purpose}</p></div>
                     <div><small>When to use it</small><p>{currentTeaching.whenToUse}</p></div>
@@ -4256,7 +4303,7 @@ export default function GameClient() {
               {!paused && <div ref={feedbackElementRef} className={`command-status ${feedback.tone}`} role="status" aria-live="polite" aria-atomic="true"><strong>{feedback.title}</strong><span>{feedback.message}</span></div>}
               <p className="help">Tab completes the current token · ? lists valid options · ↑/↓ recalls redacted history · Highlight to copy · Right-click or Ctrl+V pastes</p>
             </div>
-          </div>
+          </PracticeWorkspace>
         </section>
       )}
 
@@ -4267,7 +4314,7 @@ export default function GameClient() {
             <strong>IPv4 troubleshooting</strong>
             <span>{scenario.phase === "complete" ? "Complete" : `${scenario.acceptedActions} steps completed`} · {modeNames[scenario.mode]}</span>
           </div>
-          <div className="practice-workspace">
+          <PracticeWorkspace>
             <aside className="task-panel">
               <div className="task-summary">
                 <span className="task-kicker">{scenarioChoices.length ? "Interpret the evidence" : scenario.phase === "complete" ? "Lab complete" : "Operational objective"}</span>
@@ -4318,7 +4365,7 @@ export default function GameClient() {
               <div className={`command-status ${scenarioLesson?.accepted ? "success" : scenarioLesson?.valid === false ? "error" : "neutral"}`} role="status" aria-live="polite" aria-atomic="true"><strong>{scenarioLesson ? scenarioLesson.awaitingConfirmation ? "Confirmation required" : scenarioLesson.accepted ? "Step accepted" : scenarioLesson.valid ? "Valid command · task still open" : "Task still open" : "Terminal ready"}</strong><span>{scenarioLesson ? `${scenarioLesson.explanation} ${scenarioLesson.useCase}` : "Enter a command, use ? to inspect the current grammar, or use Tab to complete an unambiguous token."}</span></div>
               <p className="help">Manual prompts · ↑/↓ recalls redacted history · Highlight to copy · Right-click or Ctrl+V pastes · Input never leaves the simulator</p>
             </div>
-          </div>
+          </PracticeWorkspace>
         </section>
       )}
 

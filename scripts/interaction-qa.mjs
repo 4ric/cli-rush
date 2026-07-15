@@ -70,7 +70,7 @@ try {
   check("Sound setting persists after refresh", await soundButton.getAttribute("aria-pressed") === toggledSound, toggledSound);
   if (toggledSound !== "true") await soundButton.click();
   await page.screenshot({ path: resolve(outputDirectory, "interaction-home-desktop.png"), fullPage: true });
-  await page.locator(".continue-card .primary").click();
+  await page.locator(".practice-option.recommended").click();
   const input = page.locator(".terminal input");
   await input.waitFor();
   await input.fill("en");
@@ -94,12 +94,18 @@ try {
   await page.getByRole("button", { name: "Complete the current token with Tab" }).click();
   await page.waitForTimeout(50);
   check("touch Tab restores terminal focus", await input.evaluate((element) => element === document.activeElement));
+  const terminalWidthBeforeCollapse = await page.locator(".terminal-panel").evaluate((element) => element.getBoundingClientRect().width);
+  await page.getByRole("button", { name: "Collapse learning context" }).click();
+  await page.waitForTimeout(220);
+  const terminalWidthAfterCollapse = await page.locator(".terminal-panel").evaluate((element) => element.getBoundingClientRect().width);
+  check("collapsing learning context expands the terminal", terminalWidthAfterCollapse > terminalWidthBeforeCollapse + 150, { terminalWidthBeforeCollapse, terminalWidthAfterCollapse });
+  await page.getByRole("button", { name: "Open learning context" }).click();
   await page.screenshot({ path: resolve(outputDirectory, "interaction-activity-desktop.png"), fullPage: false });
 
   await page.locator(".brand-link").click();
   await page.locator(".screen-home").waitFor();
   await page.locator("details.mode-picker > summary").click();
-  await page.getByRole("button", { name: "Start Easy practice" }).click();
+  await page.getByRole("button", { name: "Start Easy practice", exact: true }).click();
   await page.locator(".screen-round").waitFor();
   const revealAndSubmit = async () => {
     const workspace = page.locator(".screen-round");
@@ -120,13 +126,13 @@ try {
   await revealed.roundInput.press("Enter");
   await page.waitForTimeout(50);
   check("an assisted correct submission plays one short two-note reward", await page.evaluate(() => window.__cliRushAudioQa.starts.length === 2 && window.__cliRushAudioQa.scheduledStops.length === 2));
-  await page.getByRole("button", { name: "Next command" }).click();
+  await page.getByRole("button", { name: "Next command", exact: true }).click();
   revealed = await revealAndSubmit();
   await revealed.roundInput.fill(revealed.answer);
   await revealed.roundInput.press("Enter");
   await page.waitForTimeout(50);
   check("a rapid reward stops the previous notes before starting new ones", await page.evaluate(() => window.__cliRushAudioQa.starts.length === 4 && window.__cliRushAudioQa.forcedStops >= 2));
-  await page.getByRole("button", { name: "Next command" }).click();
+  await page.getByRole("button", { name: "Next command", exact: true }).click();
 
   const cdp = await desktop.newCDPSession(page);
   await cdp.send("Emulation.setDeviceMetricsOverride", { width: 720, height: 450, screenWidth: 1440, screenHeight: 900, deviceScaleFactor: 1, mobile: false });
@@ -187,12 +193,12 @@ try {
   check("mobile account menu opens beneath the header and stays on-screen", accountMenu.visible && accountMenu.contained, accountMenu);
   check("mobile account menu keeps command management reachable", await mobilePage.getByRole("button", { name: "Manage commands" }).isVisible());
   await mobilePage.locator("details.account-menu > summary").click();
-  await mobilePage.locator(".continue-card .primary").click();
+  await mobilePage.locator(".practice-option.recommended").click();
   const mobileInput = mobilePage.locator(".terminal input");
   await mobileInput.waitFor();
   const idleTerminal = await mobilePage.evaluate(() => {
     const log = document.querySelector(".terminal-panel > .terminal > .log")?.getBoundingClientRect();
-    const shortcuts = [...document.querySelectorAll(".terminal-panel .terminal-shortcuts button")].map((element) => element.getBoundingClientRect());
+    const shortcuts = [...document.querySelectorAll(".terminal-panel .terminal-toolbar .terminal-shortcut")].map((element) => element.getBoundingClientRect());
     return {
       logHeight: log?.height ?? null,
       shortcutCount: shortcuts.length,
@@ -200,7 +206,10 @@ try {
       documentOverflow: document.documentElement.scrollWidth > innerWidth + 1,
     };
   });
-  check("idle mobile terminal uses a compact history and contained shortcut keys", idleTerminal.logHeight <= 200 && idleTerminal.shortcutCount === 9 && idleTerminal.shortcutsContained && !idleTerminal.documentOverflow, idleTerminal);
+  check("idle mobile terminal uses a compact history and a single-row essential toolbar", idleTerminal.logHeight >= 140 && idleTerminal.shortcutCount === 3 && idleTerminal.shortcutsContained && !idleTerminal.documentOverflow, idleTerminal);
+  await mobilePage.getByRole("button", { name: "Hide keys" }).click();
+  check("mobile command toolbar can collapse without hiding the input", !await mobilePage.getByRole("button", { name: "Recall the previous command" }).isVisible() && await mobileInput.isVisible());
+  await mobilePage.getByRole("button", { name: "Keys", exact: true }).click();
   await mobilePage.getByRole("button", { name: "Need help?" }).click();
   const mobileModeMap = await mobilePage.evaluate(() => {
     const stages = [...document.querySelectorAll(".task-details.open .mode-map-stage > span")].map((element) => {
@@ -226,17 +235,17 @@ try {
     const shell = document.querySelector(".shell")?.getBoundingClientRect();
     const headerControls = [...document.querySelectorAll("header > .mobile-back, header > .brand, header > .mobile-activity, header > .controls")].map((element) => {
       const controlRect = element.getBoundingClientRect();
-      return { width: controlRect.width, height: controlRect.height, top: controlRect.top, bottom: controlRect.bottom, visible: getComputedStyle(element).visibility === "visible" && getComputedStyle(element).display !== "none" };
+      return { width: controlRect.width, height: controlRect.height, top: controlRect.top, bottom: controlRect.bottom, visible: getComputedStyle(element).visibility === "visible" && getComputedStyle(element).display !== "none" && controlRect.width > 0 && controlRect.height > 0 };
     });
     const taskDisplay = getComputedStyle(document.querySelector(".task-panel")).display;
     return {
       reachable: Boolean(rect && rect.height >= 48 && rect.top >= 0 && rect.bottom <= 430),
       terminalVisible: Boolean(terminal && terminal.height >= 250),
       historyVisible: Boolean(log && log.height >= 50),
-      formContained: Boolean(form && form.height >= 140 && form.bottom <= 430),
+      formContained: Boolean(form && form.height >= 96 && form.bottom <= 430),
       statusContained: Boolean(status && status.bottom <= 430),
       shellContained: Boolean(shell && shell.bottom <= 431),
-      headerControlsVisible: headerControls.length === 4 && headerControls.every((control) => control.visible && control.width > 0 && control.height > 0 && control.top >= 0 && control.bottom <= 70),
+      headerHidden: headerControls.every((control) => !control.visible),
       headerControls,
       taskHidden: taskDisplay === "none",
       overflow: document.documentElement.scrollWidth > innerWidth + 1,
@@ -244,7 +253,7 @@ try {
       visualHeight: window.visualViewport?.height,
     };
   });
-  check("software keyboard gives the terminal the visible iPhone viewport", keyboard.reachable && keyboard.terminalVisible && keyboard.historyVisible && keyboard.formContained && keyboard.statusContained && keyboard.shellContained && keyboard.headerControlsVisible && keyboard.taskHidden && !keyboard.overflow, keyboard);
+  check("software keyboard gives the terminal the visible iPhone viewport", keyboard.reachable && keyboard.terminalVisible && keyboard.historyVisible && keyboard.formContained && keyboard.statusContained && keyboard.shellContained && keyboard.headerHidden && keyboard.taskHidden && !keyboard.overflow, keyboard);
   await mobilePage.screenshot({ path: resolve(outputDirectory, "interaction-mobile-keyboard.png"), fullPage: false });
   await mobilePage.evaluate(() => window.__cliRushSetVisualViewport(844));
   await mobilePage.waitForFunction(() => document.documentElement.dataset.keyboardOpen !== "true");
@@ -252,7 +261,7 @@ try {
 
   await mobilePage.locator(".brand-link").click();
   await mobilePage.locator("details.mode-picker > summary").click();
-  await mobilePage.getByRole("button", { name: "Start Easy practice" }).click();
+  await mobilePage.getByRole("button", { name: "Start Easy practice", exact: true }).click();
   const mobileRound = mobilePage.locator(".screen-round");
   await mobileRound.locator(".terminal input").waitFor();
   await mobileRound.getByRole("button", { name: "Need help?" }).click();
@@ -267,11 +276,11 @@ try {
     const details = document.querySelector(".task-panel.answer-complete .task-details");
     return {
       nextVisible: Boolean(next && next.top >= 0 && next.bottom <= innerHeight),
-      detailsPosition: details ? getComputedStyle(details).position : null,
+      detailsVisible: details ? getComputedStyle(details).display !== "none" : false,
       scrollY,
     };
   });
-  check("a correct mobile answer keeps Next command immediately reachable without a blocking sheet", completedAnswer.nextVisible && completedAnswer.detailsPosition === "static", completedAnswer);
+  check("a correct mobile answer keeps Next command immediately reachable without a blocking sheet", completedAnswer.nextVisible && !completedAnswer.detailsVisible, completedAnswer);
   await mobilePage.screenshot({ path: resolve(outputDirectory, "interaction-mobile-complete.png"), fullPage: false });
   await mobile.close();
 
@@ -297,7 +306,7 @@ try {
   check("standalone relaunch restores the activity", await installed.locator("#scenario-command").count() === 1 && await installed.getByText(/Step 2 of 26/iu).count() > 0);
   check("standalone display mode is applied", await installed.evaluate(() => document.documentElement.dataset.standalone === "true"));
   await installed.locator(".brand-link").click();
-  check("in-app brand Back returns home", await installed.locator(".continue-card").count() === 1);
+  check("in-app brand Back returns home", await installed.locator(".practice-hub").count() === 1);
   await standalone.close();
 
   const report = { generatedAt: new Date().toISOString(), url: baseUrl, assertions, pass: assertions.every((entry) => entry.pass) };

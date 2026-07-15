@@ -28,7 +28,7 @@ try {
   });
   await flow.navigate(baseUrl, { name: "Home navigation" });
   await flow.startTimespan({ name: "Open activity and use terminal" });
-  await page.locator(".continue-card .primary").click();
+  await page.locator(".practice-option.recommended").click();
   const input = page.locator(".terminal input");
   await input.wait();
   await input.fill("e");

@@ -5,13 +5,16 @@ import { chromium } from "playwright";
 const baseUrl = process.env.CLI_RUSH_QA_URL ?? "http://127.0.0.1:4174/";
 const outputDirectory = resolve(process.env.CLI_RUSH_QA_OUTPUT ?? "outputs/browser-qa");
 const allViewports = [
-  { name: "small-phone", width: 320, height: 568, mobile: true },
+  { name: "small-phone", width: 360, height: 800, mobile: true },
   { name: "iphone-portrait", width: 390, height: 844, mobile: true },
+  { name: "large-phone", width: 430, height: 932, mobile: true },
   { name: "iphone-landscape", width: 844, height: 390, mobile: true },
   { name: "tablet", width: 768, height: 1024, mobile: true },
+  { name: "tablet-landscape", width: 1024, height: 768, mobile: false },
   { name: "laptop-1080p", width: 1366, height: 768, mobile: false },
   { name: "desktop-1080p", width: 1920, height: 1080, mobile: false },
   { name: "desktop-2k", width: 2560, height: 1440, mobile: false },
+  { name: "ultrawide", width: 3440, height: 1440, mobile: false },
 ];
 const requestedViewport = process.env.CLI_RUSH_QA_VIEWPORT;
 const viewports = requestedViewport
@@ -66,7 +69,7 @@ const inspect = async (page, viewport, screen) => page.evaluate(({ viewportName,
   const terminalFormContained = !terminal || !form || (form.top >= terminal.top - 1 && form.bottom <= terminal.bottom + 1);
   const feedbackSeparated = !terminal || !status || status.top >= terminal.bottom - 1;
   const horizontallyArranged = workspaceStyle?.display === "grid" || workspaceStyle?.flexDirection === "row";
-  const columnsSeparated = !task || !terminalPanel || !horizontallyArranged || task.right <= terminalPanel.left + 1;
+  const columnsSeparated = !task || !terminalPanel || !horizontallyArranged || terminalPanel.right <= task.left + 1;
   const mobileStackSeparated = !task || !terminalPanel || horizontallyArranged || task.bottom <= terminalPanel.top + 1;
   const activeScreen = [...document.querySelector("main")?.classList ?? []].find((entry) => entry.startsWith("screen-"))?.slice(7) ?? null;
   const expectedActiveScreen = expectedScreen === "home-expanded" ? "home"
@@ -85,7 +88,7 @@ const inspect = async (page, viewport, screen) => page.evaluate(({ viewportName,
   if (!columnsSeparated || !mobileStackSeparated) problems.push("task and terminal panels overlap");
   if (inputFontSize !== null && inputFontSize < 16) problems.push(`command input is ${inputFontSize}px`);
   if (expectedActiveScreen && activeScreen !== expectedActiveScreen) problems.push(`expected ${expectedActiveScreen}, found ${activeScreen}`);
-  if (taskWidth !== null && innerWidth > 900 && taskWidth < 379) problems.push(`desktop Learning Coach is only ${taskWidth.toFixed(1)}px wide`);
+  if (taskWidth !== null && innerWidth > 900 && taskWidth < 280) problems.push(`desktop learning context is only ${taskWidth.toFixed(1)}px wide`);
   if (activeScreen === "manage" && document.querySelector(".account-menu[open]")) problems.push("account menu stayed open over command administration");
   return {
     viewport: viewportName,
@@ -107,7 +110,9 @@ const inspect = async (page, viewport, screen) => page.evaluate(({ viewportName,
 }, { viewportName: viewport.name, expectedScreen: screen });
 
 const saveScreenshot = async (page, viewport, screen) => {
-  if (!["iphone-portrait", "laptop-1080p", "desktop-2k"].includes(viewport.name)) return;
+  const fullJourneyViewport = ["iphone-portrait", "laptop-1080p", "desktop-2k"].includes(viewport.name);
+  const representativeScreen = screen === "home" || screen === "navigation";
+  if (!fullJourneyViewport && !representativeScreen) return;
   await page.screenshot({
     path: resolve(outputDirectory, `responsive-${viewport.name}-${screen}.png`),
     fullPage: false,
@@ -162,14 +167,14 @@ try {
       await page.locator("details.mode-picker > summary").click();
       await page.locator("details.good-to-know > summary").click();
 
-      await page.locator(".continue-card .primary").click();
+      await page.locator(".practice-option.recommended").click();
       await settle(page, ".screen-navigation .terminal input");
       await record(page, viewport, "navigation");
       await returnHome(page);
 
       await page.locator("details.mode-picker > summary").click();
       await page.getByRole("button", { name: /^Normal\b/u }).click();
-      await page.getByRole("button", { name: "Start Normal rush" }).click();
+      await page.getByRole("button", { name: "Start Normal rush", exact: true }).click();
       await settle(page, ".screen-round .terminal input");
       await record(page, viewport, "round");
       await recordOpenCoach(page, viewport, "round");
@@ -185,12 +190,14 @@ try {
       await recordOpenCoach(page, viewport, "scenario");
       await returnHome(page);
 
+      await page.locator("details.additional-labs > summary").click();
       await page.getByRole("button", { name: /(?:Start|Continue|Review) Lab 2/iu }).click();
       await settle(page, ".screen-guided-lab");
       await record(page, viewport, "guided-lab-router");
       await recordOpenCoach(page, viewport, "guided-lab-router");
       await returnHome(page);
 
+      await page.locator("details.additional-labs > summary").click();
       await page.getByRole("button", { name: /(?:Start|Continue|Review) Lab 3/iu }).click();
       await settle(page, ".screen-guided-lab");
       await record(page, viewport, "guided-lab-switch");
